@@ -19,7 +19,6 @@
 
 package org.elasticsearch.index.translog;
 
-import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.io.stream.ByteBufferStreamInput;
 
 import java.io.IOException;

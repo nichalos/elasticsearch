@@ -127,7 +127,6 @@ import org.hamcrest.MatcherAssert;
 import org.junit.After;
 import org.junit.Before;
 
-import java.io.IOError;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
@@ -298,7 +297,7 @@ public class InternalEngineTests extends ESTestCase {
 
     protected Translog createTranslog(Path translogPath) throws IOException {
         TranslogConfig translogConfig = new TranslogConfig(shardId, translogPath, INDEX_SETTINGS, BigArrays.NON_RECYCLING_INSTANCE);
-        return new Translog(translogConfig, null, () -> SequenceNumbersService.UNASSIGNED_SEQ_NO);
+        return new Translog(translogConfig, Long.MAX_VALUE, null, () -> SequenceNumbersService.UNASSIGNED_SEQ_NO, (current, generations) -> current);
     }
 
     protected SnapshotDeletionPolicy createSnapshotDeletionPolicy() {
@@ -2322,8 +2321,10 @@ public class InternalEngineTests extends ESTestCase {
 
         Translog translog = new Translog(
             new TranslogConfig(shardId, createTempDir(), INDEX_SETTINGS, BigArrays.NON_RECYCLING_INSTANCE),
+            Long.MAX_VALUE,
             null,
-            () -> SequenceNumbersService.UNASSIGNED_SEQ_NO);
+            () -> SequenceNumbersService.UNASSIGNED_SEQ_NO,
+            (current, generations) -> current);
         translog.add(new Translog.Index("test", "SomeBogusId", "{}".getBytes(Charset.forName("UTF-8"))));
         assertEquals(generation.translogFileGeneration, translog.currentFileGeneration());
         translog.close();

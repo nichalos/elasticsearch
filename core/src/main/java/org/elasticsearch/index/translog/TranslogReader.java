@@ -44,19 +44,30 @@ public class TranslogReader extends BaseTranslogReader implements Closeable {
     private static final byte LUCENE_CODEC_HEADER_BYTE = 0x3f;
     private static final byte UNVERSIONED_TRANSLOG_HEADER_BYTE = 0x00;
 
-
-    private final int totalOperations;
     protected final long length;
+    private final int totalOperations;
+    private final long minSeqNo;
+    private final long maxSeqNo;
     protected final AtomicBoolean closed = new AtomicBoolean(false);
 
     /**
      * Create a reader of translog file channel. The length parameter should be consistent with totalOperations and point
      * at the end of the last operation in this snapshot.
      */
-    public TranslogReader(long generation, FileChannel channel, Path path, long firstOperationOffset, long length, int totalOperations) {
+    public TranslogReader(
+        final long generation,
+        final FileChannel channel,
+        final Path path,
+        final long firstOperationOffset,
+        final long length,
+        final int totalOperations,
+        final long minSeqNo,
+        final long maxSeqNo) {
         super(generation, channel, path, firstOperationOffset);
         this.length = length;
         this.totalOperations = totalOperations;
+        this.minSeqNo = minSeqNo;
+        this.maxSeqNo = maxSeqNo;
     }
 
     /**
@@ -116,7 +127,15 @@ public class TranslogReader extends BaseTranslogReader implements Closeable {
                             throw new TranslogCorruptedException("expected shard UUID " + uuidBytes + " but got: " + ref +
                                             " this translog file belongs to a different translog. path:" + path);
                         }
-                        return new TranslogReader(checkpoint.generation, channel, path, ref.length + CodecUtil.headerLength(TranslogWriter.TRANSLOG_CODEC) + Integer.BYTES, checkpoint.offset, checkpoint.numOps);
+                        return new TranslogReader(
+                            checkpoint.generation,
+                            channel,
+                            path,
+                            ref.length + CodecUtil.headerLength(TranslogWriter.TRANSLOG_CODEC) + Integer.BYTES,
+                            checkpoint.offset,
+                            checkpoint.numOps,
+                            checkpoint.minSeqNo,
+                            checkpoint.maxSeqNo);
                     default:
                         throw new TranslogCorruptedException("No known translog stream version: " + version + " path:" + path);
                 }
@@ -136,6 +155,14 @@ public class TranslogReader extends BaseTranslogReader implements Closeable {
 
     public int totalOperations() {
         return totalOperations;
+    }
+
+    public long minSeqNo() {
+        return minSeqNo;
+    }
+
+    public long maxSeqNo() {
+        return maxSeqNo;
     }
 
     /**

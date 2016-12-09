@@ -38,6 +38,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 public class TranslogWriter extends BaseTranslogReader implements Closeable {
@@ -60,6 +61,8 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
     /* the total offset of this file including the bytes written to the file as well as into the buffer */
     private volatile long totalOffset;
 
+    private volatile long minSeqNo = Long.MAX_VALUE;
+    private volatile long maxSeqNo = Long.MIN_VALUE;
     private final LongSupplier globalCheckpointSupplier;
 
     protected final AtomicBoolean closed = new AtomicBoolean(false);
@@ -115,7 +118,7 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
             writeHeader(out, ref);
             channel.force(true);
             final Checkpoint checkpoint =
-                writeCheckpoint(channelFactory, headerLength, 0, globalCheckpointSupplier.getAsLong(), file.getParent(), fileGeneration);
+                writeCheckpoint(channelFactory, headerLength, 0, Long.MAX_VALUE, Long.MIN_VALUE, globalCheckpointSupplier.getAsLong(), file.getParent(), fileGeneration);
             final TranslogWriter writer =
                 new TranslogWriter(channelFactory, shardId, checkpoint, channel, file, bufferSize, globalCheckpointSupplier);
             return writer;
@@ -151,7 +154,7 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
     /**
      * add the given bytes to the translog and return the location they were written at
      */
-    public synchronized Translog.Location add(BytesReference data) throws IOException {
+    public synchronized Translog.Location add(BytesReference data, long seqNo) throws IOException {
         ensureOpen();
         final long offset = totalOffset;
         try {
@@ -166,6 +169,8 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
         }
         totalOffset += data.length();
         operationCounter++;
+        minSeqNo = Math.min(minSeqNo, seqNo);
+        maxSeqNo = Math.max(maxSeqNo, seqNo);
         return new Translog.Location(generation, offset, data.length());
     }
 
@@ -196,6 +201,14 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
         return totalOffset;
     }
 
+    public long getMinSeqNo() {
+        return minSeqNo;
+    }
+
+    public long getMaxSeqNo() {
+        return maxSeqNo;
+    }
+
     /**
      * closes this writer and transfers it's underlying file channel to a new immutable reader
      */
@@ -221,7 +234,15 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
                     boolean success = false;
                     try {
                         final TranslogReader reader =
-                            new TranslogReader(generation, channel, path, firstOperationOffset, getWrittenOffset(), operationCounter);
+                            new TranslogReader(
+                                generation,
+                                channel,
+                                path,
+                                firstOperationOffset,
+                                getWrittenOffset(),
+                                operationCounter,
+                                minSeqNo,
+                                maxSeqNo);
                         success = true;
                         return reader;
                     } finally {
@@ -295,7 +316,7 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
                     try {
                         channel.force(false);
                         checkpoint =
-                            writeCheckpoint(channelFactory, offsetToSync, opsCounter, globalCheckpoint, path.getParent(), generation);
+                            writeCheckpoint(channelFactory, offsetToSync, opsCounter, minSeqNo, maxSeqNo, globalCheckpoint, path.getParent(), generation);
                     } catch (Exception ex) {
                         try {
                             closeWithTragicEvent(ex);
@@ -336,11 +357,13 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
         ChannelFactory channelFactory,
         long syncPosition,
         int numOperations,
+        long minSeqNo,
+        long maxSeqNo,
         long globalCheckpoint,
         Path translogFile,
         long generation) throws IOException {
         final Path checkpointFile = translogFile.resolve(Translog.CHECKPOINT_FILE_NAME);
-        final Checkpoint checkpoint = new Checkpoint(syncPosition, numOperations, generation, globalCheckpoint);
+        final Checkpoint checkpoint = new Checkpoint(syncPosition, numOperations, generation, minSeqNo, maxSeqNo, globalCheckpoint);
         Checkpoint.write(channelFactory::open, checkpointFile, checkpoint, StandardOpenOption.WRITE);
         return checkpoint;
     }
@@ -402,4 +425,5 @@ public class TranslogWriter extends BaseTranslogReader implements Closeable {
             throw new IllegalStateException("never close this stream");
         }
     }
+
 }

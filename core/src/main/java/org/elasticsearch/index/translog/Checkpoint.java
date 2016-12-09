@@ -40,6 +40,8 @@ class Checkpoint {
     final long offset;
     final int numOps;
     final long generation;
+    final long minSeqNo;
+    final long maxSeqNo;
     final long globalCheckpoint;
 
     private static final int INITIAL_VERSION = 1; // start with 1, just to recognize there was some magic serialization logic before
@@ -52,6 +54,8 @@ class Checkpoint {
         + Integer.BYTES  // ops
         + Long.BYTES // offset
         + Long.BYTES // generation
+        + Long.BYTES // minimum sequence number, introduced in 6.0.0
+        + Long.BYTES // maximum sequence number, introduced in 6.0.0
         + Long.BYTES // global checkpoint, introduced in 6.0.0
         + CodecUtil.footerLength();
 
@@ -66,10 +70,12 @@ class Checkpoint {
             + Long.BYTES // offset
             + Long.BYTES; // generation
 
-    Checkpoint(long offset, int numOps, long generation, long globalCheckpoint) {
+    Checkpoint(long offset, int numOps, long generation, long minSeqNo, long maxSeqNo, long globalCheckpoint) {
         this.offset = offset;
         this.numOps = numOps;
         this.generation = generation;
+        this.minSeqNo = minSeqNo;
+        this.maxSeqNo = maxSeqNo;
         this.globalCheckpoint = globalCheckpoint;
     }
 
@@ -77,21 +83,35 @@ class Checkpoint {
         out.writeLong(offset);
         out.writeInt(numOps);
         out.writeLong(generation);
+        out.writeLong(minSeqNo);
+        out.writeLong(maxSeqNo);
         out.writeLong(globalCheckpoint);
     }
 
     static Checkpoint readChecksummedV2(DataInput in) throws IOException {
-        return new Checkpoint(in.readLong(), in.readInt(), in.readLong(), in.readLong());
+        return new Checkpoint(in.readLong(), in.readInt(), in.readLong(), in.readLong(), in.readLong(), in.readLong());
     }
 
     // reads a checksummed checkpoint introduced in ES 5.0.0
     static Checkpoint readChecksummedV1(DataInput in) throws IOException {
-        return new Checkpoint(in.readLong(), in.readInt(), in.readLong(), SequenceNumbersService.UNASSIGNED_SEQ_NO);
+        return new Checkpoint(
+            in.readLong(),
+            in.readInt(),
+            in.readLong(),
+            SequenceNumbersService.NO_OPS_PERFORMED,
+            SequenceNumbersService.NO_OPS_PERFORMED,
+            SequenceNumbersService.UNASSIGNED_SEQ_NO);
     }
 
     // reads checkpoint from ES < 5.0.0
     static Checkpoint readNonChecksummed(DataInput in) throws IOException {
-        return new Checkpoint(in.readLong(), in.readInt(), in.readLong(), SequenceNumbersService.UNASSIGNED_SEQ_NO);
+        return new Checkpoint(
+            in.readLong(),
+            in.readInt(),
+            in.readLong(),
+            SequenceNumbersService.NO_OPS_PERFORMED,
+            SequenceNumbersService.NO_OPS_PERFORMED,
+            SequenceNumbersService.UNASSIGNED_SEQ_NO);
     }
 
     @Override
@@ -99,7 +119,9 @@ class Checkpoint {
         return "Checkpoint{" +
             "offset=" + offset +
             ", numOps=" + numOps +
-            ", translogFileGeneration=" + generation +
+            ", generation=" + generation +
+            ", minSeqNo=" + minSeqNo +
+            ", maxSeqNo=" + maxSeqNo +
             ", globalCheckpoint=" + globalCheckpoint +
             '}';
     }
@@ -174,8 +196,16 @@ class Checkpoint {
         if (numOps != that.numOps) {
             return false;
         }
-        return generation == that.generation;
-
+        if (generation != that.generation) {
+            return false;
+        }
+        if (minSeqNo != that.minSeqNo) {
+            return false;
+        }
+        if (maxSeqNo != that.maxSeqNo) {
+            return false;
+        }
+        return globalCheckpoint == that.globalCheckpoint;
     }
 
     @Override
@@ -183,6 +213,10 @@ class Checkpoint {
         int result = Long.hashCode(offset);
         result = 31 * result + numOps;
         result = 31 * result + Long.hashCode(generation);
+        result = 31 * result + Long.hashCode(minSeqNo);
+        result = 31 * result + Long.hashCode(maxSeqNo);
+        result = 31 * result + Long.hashCode(globalCheckpoint);
         return result;
     }
+
 }
