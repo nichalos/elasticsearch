@@ -121,8 +121,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
     private static final long NOT_SET_GENERATION = -1; // -1 is safe as it will not cause a translog deletion.
 
     private volatile long currentCommittingGeneration = NOT_SET_GENERATION;
-    private volatile long minTranslogFileGeneration = NOT_SET_GENERATION;
-    private volatile long lastCommittedTranslogFileGeneration = NOT_SET_GENERATION;
+    private volatile long lastCommittedGeneration = NOT_SET_GENERATION; // generation needed to recover from the last Lucene commit
     private final AtomicBoolean closed = new AtomicBoolean();
     private final TranslogConfig config;
     private final LongSupplier globalCheckpointSupplier;
@@ -182,8 +181,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
                 boolean success = false;
                 try {
                     current = createWriter(checkpoint.generation + 1);
-                    this.minTranslogFileGeneration = minTranslogFileGeneration;
-                    this.lastCommittedTranslogFileGeneration = translogGeneration.translogFileGeneration;
+                    this.lastCommittedGeneration = translogGeneration.translogFileGeneration;
                     success = true;
                 } finally {
                     // we have to close all the recovered ones otherwise we leak file handles here
@@ -203,8 +201,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
                 Checkpoint.write(getChannelFactory(), checkpointFile, checkpoint, StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW);
                 IOUtils.fsync(checkpointFile, false);
                 current = createWriter(generation);
-                this.minTranslogFileGeneration = NOT_SET_GENERATION;
-                this.lastCommittedTranslogFileGeneration = NOT_SET_GENERATION;
+                this.lastCommittedGeneration = NOT_SET_GENERATION;
 
             }
             // now that we know which files are there, create a new current one.
@@ -228,7 +225,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
             for (long i = generation.translogFileGeneration; i < checkpoint.generation; i++) {
                 Path committedTranslogFile = location.resolve(getFilename(i));
                 if (Files.exists(committedTranslogFile) == false) {
-                    throw new IllegalStateException("translog file doesn't exist with generation: " + i + " lastCommitted: " + lastCommittedTranslogFileGeneration + " checkpoint: " + checkpoint.generation + " - translog ids must be consecutive");
+                    throw new IllegalStateException("translog file doesn't exist with generation: " + i + " lastCommitted: " + lastCommittedGeneration + " checkpoint: " + checkpoint.generation + " - translog ids must be consecutive");
                 }
                 final TranslogReader reader = openReader(committedTranslogFile, Checkpoint.read(location.resolve(getCommitCheckpointFileName(i))));
                 foundTranslogs.add(reader);
@@ -339,14 +336,14 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
      * Returns the number of operations in the transaction files that aren't committed to lucene..
      */
     public int totalOperations() {
-        return totalOperations(lastCommittedTranslogFileGeneration);
+        return totalOperations(lastCommittedGeneration);
     }
 
     /**
      * Returns the size in bytes of the translog files that aren't committed to lucene.
      */
     public long sizeInBytes() {
-        return sizeInBytes(lastCommittedTranslogFileGeneration);
+        return sizeInBytes(lastCommittedGeneration);
     }
 
     /**
@@ -495,7 +492,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
     public Translog.View newView() {
         try (ReleasableLock lock = readLock.acquire()) {
             ensureOpen();
-            View view = new View(lastCommittedTranslogFileGeneration);
+            View view = new View(lastCommittedGeneration);
             outstandingViews.add(view);
             return view;
         }
@@ -1233,10 +1230,6 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
             IOUtils.fsync(commitCheckpoint.getParent(), true);
             // create a new translog file, this will sync it and update the checkpoint data
             current = createWriter(current.getGeneration() + 1);
-            final Stream<TranslogGenerationInfo> generations =
-                readers
-                    .stream()
-                    .map(reader -> new TranslogGenerationInfo(reader.getGeneration(), reader.minSeqNo(), reader.maxSeqNo()));
             logger.trace("current translog set to [{}]", current.getGeneration());
         } catch (final Exception e) {
             IOUtils.closeWhileHandlingException(this); // tragic event
@@ -1245,7 +1238,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
         return 0;
     }
 
-    public long commit(final long minTranslogFileGeneration) throws IOException {
+    public long commit(final long committedGeneration) throws IOException {
         try (final ReleasableLock ignored = writeLock.acquire()) {
             ensureOpen();
             if (currentCommittingGeneration == NOT_SET_GENERATION) {
@@ -1254,8 +1247,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
             assert currentCommittingGeneration != NOT_SET_GENERATION;
             assert readers.stream().anyMatch(r -> r.getGeneration() == currentCommittingGeneration) :
                 "reader list doesn't contain committing generation [" + currentCommittingGeneration + "]";
-            this.minTranslogFileGeneration = minTranslogFileGeneration;
-            lastCommittedTranslogFileGeneration = current.getGeneration();
+            lastCommittedGeneration = committedGeneration;
             currentCommittingGeneration = NOT_SET_GENERATION;
             trimUnreferencedReaders();
         }
@@ -1269,7 +1261,7 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
                 return;
             }
             final long minReferencedGen = Math.min(
-                minTranslogFileGeneration,
+                lastCommittedGeneration,
                 outstandingViews.stream().mapToLong(View::minTranslogGeneration).min().orElse(Long.MAX_VALUE));
             final List<TranslogReader> unreferenced =
                 readers.stream().filter(r -> r.getGeneration() < minReferencedGen).collect(Collectors.toList());
@@ -1318,42 +1310,16 @@ public class Translog extends AbstractIndexShardComponent implements IndexShardC
         }
     }
 
-    public TranslogGeneration getMinGenerationForLocalCheckpoint(final long localCheckpoint) {
+    public TranslogGeneration getMinGenerationForSeqNo(final long seqNo) {
         try (final ReleasableLock ignored = writeLock.acquire()) {
             final long minTranslogFileGeneration = readers
                 .stream()
-                .filter(reader -> reader.maxSeqNo() > localCheckpoint)
+                .filter(reader -> reader.maxSeqNo() > seqNo)
                 .mapToLong(TranslogReader::getGeneration)
                 .min()
                 .orElseGet(this::currentFileGeneration);
             return new TranslogGeneration(translogUUID, minTranslogFileGeneration);
         }
-    }
-
-    public static class TranslogGenerationInfo {
-
-        private final long translogGeneration;
-        private final long minSeqNo;
-        private final long maxSeqNo;
-
-        public TranslogGenerationInfo(final long translogGeneration, final long minSeqNo, final long maxSeqNo) {
-            this.translogGeneration = translogGeneration;
-            this.minSeqNo = minSeqNo;
-            this.maxSeqNo = maxSeqNo;
-        }
-
-        public long getTranslogGeneration() {
-            return translogGeneration;
-        }
-
-        public long getMinSeqNo() {
-            return minSeqNo;
-        }
-
-        public long getMaxSeqNo() {
-            return maxSeqNo;
-        }
-
     }
 
     /**

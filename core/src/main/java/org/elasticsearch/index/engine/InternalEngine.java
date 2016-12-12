@@ -46,7 +46,6 @@ import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.lucene.LoggerInfoStream;
 import org.elasticsearch.common.lucene.Lucene;
@@ -131,7 +130,6 @@ public class InternalEngine extends Engine {
     private final AtomicLong maxUnsafeAutoIdTimestamp = new AtomicLong(-1);
     private final CounterMetric numVersionLookups = new CounterMetric();
     private final CounterMetric numIndexVersionsLookups = new CounterMetric();
-    private final AtomicLong minTranslogFileGeneration = new AtomicLong(Long.MAX_VALUE);
 
     public InternalEngine(EngineConfig engineConfig) throws EngineException {
         super(engineConfig);
@@ -965,12 +963,12 @@ public class InternalEngine extends Engine {
                     try {
                         translog.prepareCommit();
                         logger.trace("starting commit for flush; commitTranslog=true");
-                        final long localCheckpoint = commitIndexWriter(indexWriter, translog, null);
+                        final long committedGeneration = commitIndexWriter(indexWriter, translog, null);
                         logger.trace("finished commit for flush");
                         // we need to refresh in order to clear older version values
                         refresh("version_table_flush");
                         // after refresh documents can be retrieved from the index so we can now commit the translog
-                        translog.commit(localCheckpoint);
+                        translog.commit(committedGeneration);
                     } catch (Exception e) {
                         throw new FlushFailedEngineException(shardId, e);
                     }
@@ -1451,7 +1449,7 @@ public class InternalEngine extends Engine {
         ensureCanFlush();
         try {
             final long localCheckpoint = seqNoService().getLocalCheckpoint();
-            final Translog.TranslogGeneration translogGeneration = translog.getMinGenerationForLocalCheckpoint(localCheckpoint);
+            final Translog.TranslogGeneration translogGeneration = translog.getMinGenerationForSeqNo(localCheckpoint);
 
             final String translogFileGeneration = Long.toString(translogGeneration.translogFileGeneration);
             final String translogUUID = translogGeneration.translogUUID;
@@ -1479,7 +1477,7 @@ public class InternalEngine extends Engine {
             });
 
             writer.commit();
-            return localCheckpoint;
+            return translogGeneration.translogFileGeneration;
         } catch (Exception ex) {
             try {
                 failEngine("lucene commit failed", ex);
