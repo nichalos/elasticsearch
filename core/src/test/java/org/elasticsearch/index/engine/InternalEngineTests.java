@@ -297,7 +297,7 @@ public class InternalEngineTests extends ESTestCase {
 
     protected Translog createTranslog(Path translogPath) throws IOException {
         TranslogConfig translogConfig = new TranslogConfig(shardId, translogPath, INDEX_SETTINGS, BigArrays.NON_RECYCLING_INSTANCE);
-        return new Translog(translogConfig, Long.MAX_VALUE, null, () -> SequenceNumbersService.UNASSIGNED_SEQ_NO, (current, generations) -> current);
+        return new Translog(translogConfig, null, () -> SequenceNumbersService.UNASSIGNED_SEQ_NO);
     }
 
     protected SnapshotDeletionPolicy createSnapshotDeletionPolicy() {
@@ -2321,10 +2321,9 @@ public class InternalEngineTests extends ESTestCase {
 
         Translog translog = new Translog(
             new TranslogConfig(shardId, createTempDir(), INDEX_SETTINGS, BigArrays.NON_RECYCLING_INSTANCE),
-            Long.MAX_VALUE,
             null,
-            () -> SequenceNumbersService.UNASSIGNED_SEQ_NO,
-            (current, generations) -> current);
+            () -> SequenceNumbersService.UNASSIGNED_SEQ_NO
+        );
         translog.add(new Translog.Index("test", "SomeBogusId", "{}".getBytes(Charset.forName("UTF-8"))));
         assertEquals(generation.translogFileGeneration, translog.currentFileGeneration());
         translog.close();

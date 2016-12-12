@@ -88,7 +88,17 @@ public class TranslogVersionTests extends ESTestCase {
     public TranslogReader openReader(Path path, long id) throws IOException {
         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
         try {
-            TranslogReader reader = TranslogReader.open(channel, path, new Checkpoint(Files.size(path), 1, id, SequenceNumbersService.NO_OPS_PERFORMED, SequenceNumbersService.NO_OPS_PERFORMED, SequenceNumbersService.UNASSIGNED_SEQ_NO), null);
+            TranslogReader reader = TranslogReader.open(
+                channel,
+                path,
+                new Checkpoint(
+                    Files.size(path),
+                    1,
+                    id,
+                    SequenceNumbersService.NO_OPS_PERFORMED,
+                    SequenceNumbersService.NO_OPS_PERFORMED,
+                    SequenceNumbersService.UNASSIGNED_SEQ_NO),
+                null);
             channel = null;
             return reader;
         } finally {

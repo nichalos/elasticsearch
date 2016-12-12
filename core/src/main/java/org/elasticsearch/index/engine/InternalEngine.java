@@ -283,28 +283,17 @@ public class InternalEngine extends Engine {
         assert openMode != null;
         final TranslogConfig translogConfig = engineConfig.getTranslogConfig();
         Translog.TranslogGeneration generation = null;
-        long minGeneration = Long.MAX_VALUE;
         if (openMode == EngineConfig.OpenMode.OPEN_INDEX_AND_TRANSLOG) {
-            final Tuple<Translog.TranslogGeneration, Long> tuple = loadTranslogIdFromCommit(writer);
+            generation = loadTranslogIdFromCommit(writer);
             // We expect that this shard already exists, so it must already have an existing translog else something is badly wrong!
-            if (tuple == null) {
+            if (generation == null) {
                 throw new IllegalStateException("no translog generation present in commit data but translog is expected to exist");
             }
-            generation = tuple.v1();
-            minGeneration = tuple.v2();
             if (generation.translogUUID == null) {
                 throw new IndexFormatTooOldException("translog", "translog has no generation nor a UUID - this might be an index from a previous version consider upgrading to N-1 first");
             }
         }
-        final Translog translog = new Translog(translogConfig, minGeneration, generation, globalCheckpointSupplier, (current, generations) -> {
-            final long minTranslogFileGeneration = generations
-                .filter(g -> g.getMaxSeqNo() > seqNoService().getLocalCheckpoint())
-                .mapToLong(Translog.TranslogGenerationInfo::getTranslogGeneration)
-                .min()
-                .orElse(current);
-            this.minTranslogFileGeneration.set(minTranslogFileGeneration);
-            return minTranslogFileGeneration;
-        });
+        final Translog translog = new Translog(translogConfig, generation, globalCheckpointSupplier);
         if (generation == null || generation.translogUUID == null) {
             assert openMode != EngineConfig.OpenMode.OPEN_INDEX_AND_TRANSLOG : "OpenMode must not be "
                 + EngineConfig.OpenMode.OPEN_INDEX_AND_TRANSLOG;
@@ -338,23 +327,20 @@ public class InternalEngine extends Engine {
      * translog id into lucene and returns null.
      */
     @Nullable
-    // nocommit: for POC
-    private Tuple<Translog.TranslogGeneration, Long> loadTranslogIdFromCommit(IndexWriter writer) throws IOException {
+    private Translog.TranslogGeneration loadTranslogIdFromCommit(IndexWriter writer) throws IOException {
         // commit on a just opened writer will commit even if there are no changes done to it
         // we rely on that for the commit data translog id key
         final Map<String, String> commitUserData = commitDataAsMap(writer);
         if (commitUserData.containsKey("translog_id")) {
             assert commitUserData.containsKey(Translog.TRANSLOG_UUID_KEY) == false : "legacy commit contains translog UUID";
-            return Tuple.tuple(new Translog.TranslogGeneration(null, Long.parseLong(commitUserData.get("translog_id"))), Long.MAX_VALUE);
+            return new Translog.TranslogGeneration(null, Long.parseLong(commitUserData.get("translog_id")));
         } else if (commitUserData.containsKey(Translog.TRANSLOG_GENERATION_KEY)) {
             if (commitUserData.containsKey(Translog.TRANSLOG_UUID_KEY) == false) {
                 throw new IllegalStateException("commit doesn't contain translog UUID");
             }
             final long translogGen = Long.parseLong(commitUserData.get(Translog.TRANSLOG_GENERATION_KEY));
             final String translogUUID = commitUserData.get(Translog.TRANSLOG_UUID_KEY);
-            final String maybeMinTranslogFileGeneration = commitUserData.get(Translog.MIN_TRANSLOG_GENERATION_KEY);
-            final long minTranslogFileGeneration = maybeMinTranslogFileGeneration != null ? Long.parseLong(maybeMinTranslogFileGeneration) : Long.MAX_VALUE;
-            return Tuple.tuple(new Translog.TranslogGeneration(translogUUID, translogGen), minTranslogFileGeneration);
+            return new Translog.TranslogGeneration(translogUUID, translogGen);
         }
         return null;
     }
@@ -979,12 +965,12 @@ public class InternalEngine extends Engine {
                     try {
                         translog.prepareCommit();
                         logger.trace("starting commit for flush; commitTranslog=true");
-                        commitIndexWriter(indexWriter, translog, null);
+                        final long localCheckpoint = commitIndexWriter(indexWriter, translog, null);
                         logger.trace("finished commit for flush");
                         // we need to refresh in order to clear older version values
                         refresh("version_table_flush");
                         // after refresh documents can be retrieved from the index so we can now commit the translog
-                        translog.commit();
+                        translog.commit(localCheckpoint);
                     } catch (Exception e) {
                         throw new FlushFailedEngineException(shardId, e);
                     }
@@ -1461,15 +1447,14 @@ public class InternalEngine extends Engine {
         }
     }
 
-    private void commitIndexWriter(IndexWriter writer, Translog translog, String syncId) throws IOException {
+    private long commitIndexWriter(IndexWriter writer, Translog translog, String syncId) throws IOException {
         ensureCanFlush();
         try {
             final long localCheckpoint = seqNoService().getLocalCheckpoint();
-            final Translog.TranslogGeneration translogGeneration = translog.getGeneration();
+            final Translog.TranslogGeneration translogGeneration = translog.getMinGenerationForLocalCheckpoint(localCheckpoint);
 
             final String translogFileGeneration = Long.toString(translogGeneration.translogFileGeneration);
             final String translogUUID = translogGeneration.translogUUID;
-            final String minTranslogGeneration = Long.toString(minTranslogFileGeneration.get());
 
             writer.setLiveCommitData(() -> {
                 /*
@@ -1481,10 +1466,9 @@ public class InternalEngine extends Engine {
                  * {@link IndexWriter#commit()} call flushes all documents, we defer computation of the max_seq_no to the time of invocation
                  * of the commit data iterator (which occurs after all documents have been flushed to Lucene).
                  */
-                final Map<String, String> commitData = new HashMap<>(6);
+                final Map<String, String> commitData = new HashMap<>(5);
                 commitData.put(Translog.TRANSLOG_GENERATION_KEY, translogFileGeneration);
                 commitData.put(Translog.TRANSLOG_UUID_KEY, translogUUID);
-                commitData.put(Translog.MIN_TRANSLOG_GENERATION_KEY, minTranslogGeneration);
                 commitData.put(LOCAL_CHECKPOINT_KEY, Long.toString(localCheckpoint));
                 if (syncId != null) {
                     commitData.put(Engine.SYNC_COMMIT_ID, syncId);
@@ -1495,6 +1479,7 @@ public class InternalEngine extends Engine {
             });
 
             writer.commit();
+            return localCheckpoint;
         } catch (Exception ex) {
             try {
                 failEngine("lucene commit failed", ex);
@@ -1601,7 +1586,7 @@ public class InternalEngine extends Engine {
      * Gets the commit data from {@link IndexWriter} as a map.
      */
     private static Map<String, String> commitDataAsMap(final IndexWriter indexWriter) {
-        Map<String, String> commitData = new HashMap<>(6);
+        Map<String, String> commitData = new HashMap<>(5);
         for (Map.Entry<String, String> entry : indexWriter.getLiveCommitData()) {
             commitData.put(entry.getKey(), entry.getValue());
         }
