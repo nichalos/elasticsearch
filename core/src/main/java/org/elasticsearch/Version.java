@@ -96,8 +96,8 @@ public class Version {
     public static final int V_5_0_3_ID_UNRELEASED = 5000399;
     public static final Version V_5_0_3_UNRELEASED = new Version(V_5_0_3_ID_UNRELEASED, org.apache.lucene.util.Version.LUCENE_6_3_0);
     // no version constant for 5.1.0 due to inadvertent release
-    public static final int V_5_1_1_ID_UNRELEASED = 5010199;
-    public static final Version V_5_1_1_UNRELEASED = new Version(V_5_1_1_ID_UNRELEASED, org.apache.lucene.util.Version.LUCENE_6_3_0);
+    public static final int V_5_1_1_ID = 5010199;
+    public static final Version V_5_1_1 = new Version(V_5_1_1_ID, org.apache.lucene.util.Version.LUCENE_6_3_0);
     public static final int V_5_1_2_ID_UNRELEASED = 5010299;
     public static final Version V_5_1_2_UNRELEASED = new Version(V_5_1_2_ID_UNRELEASED, org.apache.lucene.util.Version.LUCENE_6_3_0);
     public static final int V_5_2_0_ID_UNRELEASED = 5020099;
@@ -126,8 +126,8 @@ public class Version {
                 return V_5_2_0_UNRELEASED;
             case V_5_1_2_ID_UNRELEASED:
                 return V_5_1_2_UNRELEASED;
-            case V_5_1_1_ID_UNRELEASED:
-                return V_5_1_1_UNRELEASED;
+            case V_5_1_1_ID:
+                return V_5_1_1;
             case V_5_0_3_ID_UNRELEASED:
                 return V_5_0_3_UNRELEASED;
             case V_5_0_2_ID:
@@ -322,12 +322,18 @@ public class Version {
         final int bwcMinor;
         if (this.onOrAfter(Version.V_6_0_0_alpha1_UNRELEASED)) {
             bwcMajor = major - 1;
-            bwcMinor = 0; // TODO we have to move this to the latest released minor of the last major but for now we just keep
+            bwcMinor = 1; // TODO we have to move this to the latest released minor of the last major but for now we just keep
         } else {
             bwcMajor = major;
             bwcMinor = 0;
         }
-        return Version.min(this, fromId(bwcMajor * 1000000 + bwcMinor * 10000 + 99));
+
+        // version 5.1.0 was never released, we have to make an exception
+        if (bwcMajor == 5 && bwcMinor == 1) {
+            return Version.min(this, Version.V_5_1_1);
+        } else {
+            return Version.min(this, fromId(bwcMajor * 1000000 + bwcMinor * 10000 + 99));
+        }
     }
 
     /**
