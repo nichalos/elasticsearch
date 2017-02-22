@@ -83,6 +83,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -111,6 +112,33 @@ import static org.elasticsearch.common.transport.NetworkExceptionHelper.isConnec
 import static org.elasticsearch.common.util.concurrent.ConcurrentCollections.newConcurrentMap;
 
 public abstract class TcpTransport<Channel> extends AbstractLifecycleComponent implements Transport {
+
+    public static class Thing {
+        private final String action;
+        private final long bytes;
+        private final boolean request;
+
+        Thing(final String action, final long bytes, final boolean request) {
+            this.action = action;
+            this.bytes = bytes;
+            this.request = request;
+        }
+
+        public String getAction() {
+            return action;
+        }
+
+        public long getBytes() {
+            return bytes;
+        }
+
+        public boolean isRequest() {
+            return request;
+        }
+    }
+
+    public static Map<ReleasableBytesStream, Thing> RELEASABLES = new IdentityHashMap<>();
+    public static final Object lock = new Object();
 
     public static final String TRANSPORT_SERVER_WORKER_THREAD_NAME_PREFIX = "transport_server_worker";
     public static final String TRANSPORT_SERVER_BOSS_THREAD_NAME_PREFIX = "transport_server_boss";
@@ -1006,10 +1034,21 @@ public abstract class TcpTransport<Channel> extends AbstractLifecycleComponent i
             options = TransportRequestOptions.builder(options).withCompress(true).build();
         }
         status = TransportStatus.setRequest(status);
-        ReleasableBytesStreamOutput bStream = new ReleasableBytesStreamOutput(bigArrays);
+        ReleasableBytesStreamOutput bStream = new ReleasableBytesStreamOutput(bigArrays) {
+            @Override
+            public String toString() {
+                return action;
+            }
+        };
+
         // we wrap this in a release once since if the onRequestSent callback throws an exception
         // we might release things twice and this should be prevented
-        final Releasable toRelease = Releasables.releaseOnce(() -> Releasables.close(bStream.bytes()));
+        final Releasable toRelease = Releasables.releaseOnce(() -> {
+            Releasables.close(bStream.bytes());
+            synchronized (lock) {
+                RELEASABLES.remove(bStream);
+            }
+        });
         boolean addedReleaseListener = false;
         StreamOutput stream = bStream;
         try {
@@ -1029,6 +1068,9 @@ public abstract class TcpTransport<Channel> extends AbstractLifecycleComponent i
             threadPool.getThreadContext().writeTo(stream);
             stream.writeString(action);
             BytesReference message = buildMessage(requestId, status, node.getVersion(), request, stream, bStream);
+            synchronized (lock) {
+                RELEASABLES.put(bStream, new Thing(action, message.length(), true));
+            }
             final TransportRequestOptions finalOptions = options;
             Runnable onRequestSent = () -> { // this might be called in a different thread
                 try {
@@ -1107,10 +1149,21 @@ public abstract class TcpTransport<Channel> extends AbstractLifecycleComponent i
             options = TransportResponseOptions.builder(options).withCompress(true).build();
         }
         status = TransportStatus.setResponse(status); // TODO share some code with sendRequest
-        ReleasableBytesStreamOutput bStream = new ReleasableBytesStreamOutput(bigArrays);
+        ReleasableBytesStreamOutput bStream = new ReleasableBytesStreamOutput(bigArrays) {
+            @Override
+            public String toString() {
+                return action;
+            }
+        };
+
         // we wrap this in a release once since if the onRequestSent callback throws an exception
         // we might release things twice and this should be prevented
-        final Releasable toRelease = Releasables.releaseOnce(() -> Releasables.close(bStream.bytes()));
+        final Releasable toRelease = Releasables.releaseOnce(() -> {
+            Releasables.close(bStream.bytes());
+            synchronized (lock) {
+                RELEASABLES.remove(bStream);
+            }
+        });
         boolean addedReleaseListener = false;
         StreamOutput stream = bStream;
         try {
@@ -1121,6 +1174,7 @@ public abstract class TcpTransport<Channel> extends AbstractLifecycleComponent i
             threadPool.getThreadContext().writeTo(stream);
             stream.setVersion(nodeVersion);
             BytesReference reference = buildMessage(requestId, status, nodeVersion, response, stream, bStream);
+            RELEASABLES.put(bStream, new Thing(action, reference.length(), false));
 
             final TransportResponseOptions finalOptions = options;
             Runnable onRequestSent = () -> { // this might be called in a different thread

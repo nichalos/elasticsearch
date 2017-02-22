@@ -23,18 +23,27 @@ import org.elasticsearch.action.main.MainAction;
 import org.elasticsearch.action.main.MainRequest;
 import org.elasticsearch.action.main.MainResponse;
 import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.io.ReleasableBytesStream;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.BigArray;
+import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.http.HttpServer;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.BytesRestResponse;
+import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestResponse;
 import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.transport.TcpTransport;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.HEAD;
@@ -61,11 +70,79 @@ public class RestMainAction extends BaseRestHandler {
     static BytesRestResponse convertMainResponse(MainResponse response, RestRequest request, XContentBuilder builder) throws IOException {
         RestStatus status = response.isAvailable() ? RestStatus.OK : RestStatus.SERVICE_UNAVAILABLE;
 
+        final Map<ReleasableBytesStream, TcpTransport.Thing> tcp;
+        final Map<RestChannel, HttpServer.Thing> http;
+        final Map<BigArray, BigArrays.Thing> arrays;
+        synchronized (TcpTransport.lock) {
+            synchronized (HttpServer.lock) {
+                synchronized (BigArrays.lock) {
+                    tcp = new HashMap<>(TcpTransport.RELEASABLES);
+                    http = new HashMap<>(HttpServer.MAP);
+                    arrays = new HashMap<>(BigArrays.MAP);
+                }
+            }
+        }
+
         // Default to pretty printing, but allow ?pretty=false to disable
         if (request.hasParam("pretty") == false) {
             builder.prettyPrint().lfAtEnd();
         }
-        response.toXContent(builder, request);
+        builder.startObject();
+        {
+            builder.startObject("tcp_transport_releasables");
+            {
+                builder.startArray("releasables");
+                {
+                    for (Map.Entry<ReleasableBytesStream, TcpTransport.Thing> entry : tcp.entrySet()) {
+                        builder.startObject();
+                        {
+                            builder.field("action", entry.getValue().getAction());
+                            builder.field("bytes", entry.getValue().getBytes());
+                            builder.field("request", entry.getValue().isRequest());
+                        }
+                        builder.endObject();
+                    }
+                }
+                builder.endArray();
+            }
+            builder.endObject();
+
+            builder.startObject("http_requests");
+            {
+                builder.startArray("requests");
+                {
+                    for (Map.Entry<RestChannel, HttpServer.Thing> entry : http.entrySet()) {
+                        builder.startObject();
+                        {
+                            builder.field("uri", entry.getValue().getUri());
+                            builder.field("length", entry.getValue().getLength());
+                        }
+                        builder.endObject();
+                    }
+                }
+                builder.endArray();
+            }
+            builder.endObject();
+
+            builder.startObject("arrays");
+            {
+                builder.startArray("entries");
+                {
+                    for (Map.Entry<BigArray, BigArrays.Thing> entry : arrays.entrySet()) {
+                        builder.startObject();
+                        {
+                            builder.field("bytes", entry.getValue().getBytes());
+                            builder.array("stack_trace", Arrays.stream(entry.getValue().getStackTraceElements()).map(StackTraceElement::toString).collect(Collectors.toList()).toArray(new String[0]));
+                        }
+                        builder.endObject();
+                    }
+                }
+                builder.endArray();
+            }
+            builder.endObject();
+        }
+        builder.endObject();
+
         return new BytesRestResponse(status, builder);
     }
 }
