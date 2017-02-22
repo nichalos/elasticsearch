@@ -25,7 +25,6 @@ import org.apache.lucene.util.RamUsageEstimator;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.breaker.CircuitBreakingException;
-import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.recycler.Recycler;
@@ -33,9 +32,33 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Map;
 
 /** Utility class to work with arrays. */
 public class BigArrays implements Releasable {
+
+    public static Map<BigArray, Thing> MAP = new IdentityHashMap<>();
+    public static final Object lock = new Object();
+
+    public static class Thing {
+        private final StackTraceElement[] stackTraceElements;
+        private final long bytes;
+
+        public Thing(StackTraceElement[] stackTraceElements, long bytes) {
+            this.stackTraceElements = stackTraceElements;
+            this.bytes = bytes;
+        }
+
+        public StackTraceElement[] getStackTraceElements() {
+            return stackTraceElements;
+        }
+
+        public long getBytes() {
+            return bytes;
+        }
+    }
 
     public static final BigArrays NON_RECYCLING_INSTANCE = new BigArrays(null, null, false);
 
@@ -443,6 +466,12 @@ public class BigArrays implements Releasable {
     private <T extends BigArray> T validate(T array) {
         boolean success = false;
         try {
+            if (this.breakerService != null) {
+                final StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+                synchronized (lock) {
+                    MAP.put(array, new Thing(stackTrace, array.ramBytesUsed()));
+                }
+            }
             adjustBreaker(array.ramBytesUsed());
             success = true;
         } finally {

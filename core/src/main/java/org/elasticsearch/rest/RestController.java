@@ -41,8 +41,11 @@ import org.elasticsearch.indices.breaker.CircuitBreakerService;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -354,6 +357,33 @@ public class RestController extends AbstractComponent implements HttpServerTrans
         }
     }
 
+    public static Map<RestChannel, Thing> MAP = new IdentityHashMap<>();
+    public static final Object lock = new Object();
+
+    public static class Thing {
+        private final String uri;
+        private final long length;
+        private final boolean request;
+
+        Thing(String uri, long length, boolean request) {
+            this.uri = uri;
+            this.length = length;
+            this.request = request;
+        }
+
+        public String getUri() {
+            return uri;
+        }
+
+        public long getLength() {
+            return length;
+        }
+
+        public boolean isRequest() {
+            return request;
+        }
+    }
+
     private static final class ResourceHandlingHttpChannel implements RestChannel {
         private final RestChannel delegate;
         private final CircuitBreakerService circuitBreakerService;
@@ -364,6 +394,9 @@ public class RestController extends AbstractComponent implements HttpServerTrans
             this.delegate = delegate;
             this.circuitBreakerService = circuitBreakerService;
             this.contentLength = contentLength;
+            synchronized (lock) {
+                MAP.put(this, new Thing(delegate.request().uri(), contentLength, true));
+            }
         }
 
         @Override
@@ -407,7 +440,15 @@ public class RestController extends AbstractComponent implements HttpServerTrans
             if (closed.compareAndSet(false, true) == false) {
                 throw new IllegalStateException("Channel is already closed");
             }
+            synchronized (lock) {
+                MAP.remove(this);
+            }
             inFlightRequestsBreaker(circuitBreakerService).addWithoutBreaking(-contentLength);
+        }
+
+        @Override
+        public String toString() {
+            return delegate.request().uri();
         }
 
     }
