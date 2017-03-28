@@ -34,9 +34,6 @@ import org.elasticsearch.transport.TransportResponse;
 
 import java.io.IOException;
 
-/**
- *
- */
 public class DfsSearchResult extends TransportResponse implements SearchPhaseResult {
 
     private static final Term[] EMPTY_TERMS = new Term[0];
@@ -105,12 +102,6 @@ public class DfsSearchResult extends TransportResponse implements SearchPhaseRes
         return fieldStatistics;
     }
 
-    public static DfsSearchResult readDfsSearchResult(StreamInput in) throws IOException, ClassNotFoundException {
-        DfsSearchResult result = new DfsSearchResult();
-        result.readFrom(in);
-        return result;
-    }
-
     @Override
     public void readFrom(StreamInput in) throws IOException {
         super.readFrom(in);
@@ -130,7 +121,6 @@ public class DfsSearchResult extends TransportResponse implements SearchPhaseRes
 
         maxDoc = in.readVInt();
     }
-
 
   @Override
     public void writeTo(StreamOutput out) throws IOException {

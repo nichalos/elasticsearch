@@ -27,15 +27,14 @@ import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.Version;
 import org.elasticsearch.bootstrap.JarHell;
 import org.elasticsearch.cli.ExitCodes;
-import org.elasticsearch.cli.SettingCommand;
+import org.elasticsearch.cli.EnvironmentAwareCommand;
 import org.elasticsearch.cli.Terminal;
 import org.elasticsearch.cli.UserException;
+import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.hash.MessageDigests;
 import org.elasticsearch.common.io.FileSystemUtils;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
-import org.elasticsearch.node.internal.InternalSettingsPreparer;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -47,9 +46,12 @@ import java.net.URLConnection;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
@@ -60,7 +62,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
@@ -100,9 +101,16 @@ import static org.elasticsearch.cli.Terminal.Verbosity.VERBOSE;
  * elasticsearch config directory, using the name of the plugin. If any files to be installed
  * already exist, they will be skipped.
  */
-class InstallPluginCommand extends SettingCommand {
+class InstallPluginCommand extends EnvironmentAwareCommand {
 
     private static final String PROPERTY_STAGING_ID = "es.plugins.staging";
+
+    // exit codes for install
+    /** A plugin with the same name is already installed. */
+    static final int PLUGIN_EXISTS = 1;
+    /** The plugin zip is not properly structured. */
+    static final int PLUGIN_MALFORMED = 2;
+
 
     /** The builtin modules, which are plugins, but cannot be installed or removed. */
     static final Set<String> MODULES;
@@ -142,29 +150,31 @@ class InstallPluginCommand extends SettingCommand {
     private final OptionSpec<Void> batchOption;
     private final OptionSpec<String> arguments;
 
-
-    public static final Set<PosixFilePermission> DIR_AND_EXECUTABLE_PERMS;
-    public static final Set<PosixFilePermission> FILE_PERMS;
+    static final Set<PosixFilePermission> BIN_DIR_PERMS;
+    static final Set<PosixFilePermission> BIN_FILES_PERMS;
+    static final Set<PosixFilePermission> CONFIG_DIR_PERMS;
+    static final Set<PosixFilePermission> CONFIG_FILES_PERMS;
+    static final Set<PosixFilePermission> PLUGIN_DIR_PERMS;
+    static final Set<PosixFilePermission> PLUGIN_FILES_PERMS;
 
     static {
-        Set<PosixFilePermission> dirAndExecutablePerms = new HashSet<>(7);
-        // Directories and executables get chmod 755
-        dirAndExecutablePerms.add(PosixFilePermission.OWNER_EXECUTE);
-        dirAndExecutablePerms.add(PosixFilePermission.OWNER_READ);
-        dirAndExecutablePerms.add(PosixFilePermission.OWNER_WRITE);
-        dirAndExecutablePerms.add(PosixFilePermission.GROUP_EXECUTE);
-        dirAndExecutablePerms.add(PosixFilePermission.GROUP_READ);
-        dirAndExecutablePerms.add(PosixFilePermission.OTHERS_READ);
-        dirAndExecutablePerms.add(PosixFilePermission.OTHERS_EXECUTE);
-        DIR_AND_EXECUTABLE_PERMS = Collections.unmodifiableSet(dirAndExecutablePerms);
+        // Bin directory get chmod 755
+        BIN_DIR_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rwxr-xr-x"));
 
-        Set<PosixFilePermission> filePerms = new HashSet<>(4);
-        // Files get chmod 644
-        filePerms.add(PosixFilePermission.OWNER_READ);
-        filePerms.add(PosixFilePermission.OWNER_WRITE);
-        filePerms.add(PosixFilePermission.GROUP_READ);
-        filePerms.add(PosixFilePermission.OTHERS_READ);
-        FILE_PERMS = Collections.unmodifiableSet(filePerms);
+        // Bin files also get chmod 755
+        BIN_FILES_PERMS = BIN_DIR_PERMS;
+
+        // Config directory get chmod 750
+        CONFIG_DIR_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rwxr-x---"));
+
+        // Config files get chmod 660
+        CONFIG_FILES_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rw-rw----"));
+
+        // Plugin directory get chmod 755
+        PLUGIN_DIR_PERMS = BIN_DIR_PERMS;
+
+        // Plugins files get chmod 644
+        PLUGIN_FILES_PERMS = Collections.unmodifiableSet(PosixFilePermissions.fromString("rw-r--r--"));
     }
 
     InstallPluginCommand() {
@@ -184,15 +194,17 @@ class InstallPluginCommand extends SettingCommand {
     }
 
     @Override
-    protected void execute(Terminal terminal, OptionSet options, Map<String, String> settings) throws Exception {
+    protected void execute(Terminal terminal, OptionSet options, Environment env) throws Exception {
         String pluginId = arguments.value(options);
         boolean isBatch = options.has(batchOption) || System.console() == null;
-        execute(terminal, pluginId, isBatch, settings);
+        execute(terminal, pluginId, isBatch, env);
     }
 
     // pkg private for testing
-    void execute(Terminal terminal, String pluginId, boolean isBatch, Map<String, String> settings) throws Exception {
-        final Environment env = InternalSettingsPreparer.prepareEnvironment(Settings.EMPTY, terminal, settings);
+    void execute(Terminal terminal, String pluginId, boolean isBatch, Environment env) throws Exception {
+        if (pluginId == null) {
+            throw new UserException(ExitCodes.USAGE, "plugin id is required");
+        }
         // TODO: remove this leniency!! is it needed anymore?
         if (Files.exists(env.pluginsFile()) == false) {
             terminal.println("Plugins directory [" + env.pluginsFile() + "] does not exist. Creating...");
@@ -211,18 +223,13 @@ class InstallPluginCommand extends SettingCommand {
             final String url;
             final String stagingHash = System.getProperty(PROPERTY_STAGING_ID);
             if (stagingHash != null) {
-                url = String.format(
-                        Locale.ROOT,
-                        "https://download.elastic.co/elasticsearch/staging/%1$s-%2$s/org/elasticsearch/plugin/%3$s/%1$s/%3$s-%1$s.zip",
-                        version,
-                        stagingHash,
-                        pluginId);
+                url = String.format(Locale.ROOT,
+                    "https://staging.elastic.co/%3$s-%1$s/downloads/elasticsearch-plugins/%2$s/%2$s-%3$s.zip",
+                    stagingHash, pluginId, version);
             } else {
-                url = String.format(
-                        Locale.ROOT,
-                        "https://download.elastic.co/elasticsearch/release/org/elasticsearch/plugin/%1$s/%2$s/%1$s-%2$s.zip",
-                        pluginId,
-                        version);
+                url = String.format(Locale.ROOT,
+                    "https://artifacts.elastic.co/downloads/elasticsearch-plugins/%1$s/%1$s-%2$s.zip",
+                    pluginId, version);
             }
             terminal.println("-> Downloading " + pluginId + " from elastic");
             return downloadZipAndChecksum(terminal, url, tmpDir);
@@ -266,11 +273,13 @@ class InstallPluginCommand extends SettingCommand {
     }
 
     /** Downloads a zip from the url, into a temp file under the given temp dir. */
+    @SuppressForbidden(reason = "We use getInputStream to download plugins")
     private Path downloadZip(Terminal terminal, String urlString, Path tmpDir) throws IOException {
         terminal.println(VERBOSE, "Retrieving zip from " + urlString);
         URL url = new URL(urlString);
         Path zip = Files.createTempFile(tmpDir, null, ".zip");
         URLConnection urlConnection = url.openConnection();
+        urlConnection.addRequestProperty("User-Agent", "elasticsearch-plugin-installer");
         int contentLength = urlConnection.getContentLength();
         try (InputStream in = new TerminalProgressInputStream(urlConnection.getInputStream(), contentLength, terminal)) {
             // must overwrite since creating the temp file above actually created the file
@@ -288,7 +297,7 @@ class InstallPluginCommand extends SettingCommand {
         private int width = 50;
         private final boolean enabled;
 
-        public TerminalProgressInputStream(InputStream is, int expectedTotalSize, Terminal terminal) {
+        TerminalProgressInputStream(InputStream is, int expectedTotalSize, Terminal terminal) {
             super(is, expectedTotalSize);
             this.terminal = terminal;
             this.enabled = expectedTotalSize > 0;
@@ -314,9 +323,10 @@ class InstallPluginCommand extends SettingCommand {
     }
 
     /** Downloads a zip from the url, as well as a SHA1 checksum, and checks the checksum. */
+    @SuppressForbidden(reason = "We use openStream to download plugins")
     private Path downloadZipAndChecksum(Terminal terminal, String urlString, Path tmpDir) throws Exception {
         Path zip = downloadZip(terminal, urlString, tmpDir);
-
+        pathsToDeleteOnShutdown.add(zip);
         URL checksumUrl = new URL(urlString + ".sha1");
         final String expectedChecksum;
         try (InputStream in = checksumUrl.openStream()) {
@@ -330,7 +340,8 @@ class InstallPluginCommand extends SettingCommand {
         byte[] zipbytes = Files.readAllBytes(zip);
         String gotChecksum = MessageDigests.toHexString(MessageDigests.sha1().digest(zipbytes));
         if (expectedChecksum.equals(gotChecksum) == false) {
-            throw new UserException(ExitCodes.IO_ERROR, "SHA1 mismatch, expected " + expectedChecksum + " but got " + gotChecksum);
+            throw new UserException(ExitCodes.IO_ERROR,
+                "SHA1 mismatch, expected " + expectedChecksum + " but got " + gotChecksum);
         }
 
         return zip;
@@ -340,9 +351,9 @@ class InstallPluginCommand extends SettingCommand {
         // unzip plugin to a staging temp dir
 
         final Path target = stagingDirectory(pluginsDir);
+        pathsToDeleteOnShutdown.add(target);
 
         boolean hasEsDir = false;
-        // TODO: we should wrap this in a try/catch and try deleting the target dir on failure?
         try (ZipInputStream zipInput = new ZipInputStream(Files.newInputStream(zip))) {
             ZipEntry entry;
             byte[] buffer = new byte[8192];
@@ -354,12 +365,14 @@ class InstallPluginCommand extends SettingCommand {
                 hasEsDir = true;
                 Path targetFile = target.resolve(entry.getName().substring("elasticsearch/".length()));
 
-                // Using the entry name as a path can result in an entry outside of the plugin dir, either if the
-                // name starts with the root of the filesystem, or it is a relative entry like ../whatever.
-                // This check attempts to identify both cases by first normalizing the path (which removes foo/..)
-                // and ensuring the normalized entry is still rooted with the target plugin directory.
+                // Using the entry name as a path can result in an entry outside of the plugin dir,
+                // either if the name starts with the root of the filesystem, or it is a relative
+                // entry like ../whatever. This check attempts to identify both cases by first
+                // normalizing the path (which removes foo/..) and ensuring the normalized entry
+                // is still rooted with the target plugin directory.
                 if (targetFile.normalize().startsWith(target) == false) {
-                    throw new IOException("Zip contains entry name '" + entry.getName() + "' resolving outside of plugin directory");
+                    throw new UserException(PLUGIN_MALFORMED, "Zip contains entry name '" +
+                        entry.getName() + "' resolving outside of plugin directory");
                 }
 
                 // be on the safe side: do not rely on that directories are always extracted
@@ -381,14 +394,15 @@ class InstallPluginCommand extends SettingCommand {
         Files.delete(zip);
         if (hasEsDir == false) {
             IOUtils.rm(target);
-            throw new UserException(ExitCodes.DATA_ERROR, "`elasticsearch` directory is missing in the plugin zip");
+            throw new UserException(PLUGIN_MALFORMED,
+                                    "`elasticsearch` directory is missing in the plugin zip");
         }
         return target;
     }
 
     private Path stagingDirectory(Path pluginsDir) throws IOException {
         try {
-            return Files.createTempDirectory(pluginsDir, ".installing-", PosixFilePermissions.asFileAttribute(DIR_AND_EXECUTABLE_PERMS));
+            return Files.createTempDirectory(pluginsDir, ".installing-", PosixFilePermissions.asFileAttribute(PLUGIN_DIR_PERMS));
         } catch (IllegalArgumentException e) {
             // Jimfs throws an IAE where it should throw an UOE
             // remove when google/jimfs#30 is integrated into Jimfs
@@ -415,13 +429,26 @@ class InstallPluginCommand extends SettingCommand {
     private PluginInfo verify(Terminal terminal, Path pluginRoot, boolean isBatch, Environment env) throws Exception {
         // read and validate the plugin descriptor
         PluginInfo info = PluginInfo.readFromProperties(pluginRoot);
+
+        // checking for existing version of the plugin
+        final Path destination = env.pluginsFile().resolve(info.getName());
+        if (Files.exists(destination)) {
+            final String message = String.format(
+                Locale.ROOT,
+                "plugin directory [%s] already exists; if you need to update the plugin, " +
+                    "uninstall it first using command 'remove %s'",
+                destination.toAbsolutePath(),
+                info.getName());
+            throw new UserException(PLUGIN_EXISTS, message);
+        }
+
         terminal.println(VERBOSE, info.toString());
 
-        // don't let luser install plugin as a module...
+        // don't let user install plugin as a module...
         // they might be unavoidably in maven central and are packaged up the same way)
         if (MODULES.contains(info.getName())) {
-            throw new UserException(
-                    ExitCodes.USAGE, "plugin '" + info.getName() + "' cannot be installed like this, it is a system module");
+            throw new UserException(ExitCodes.USAGE, "plugin '" + info.getName() +
+                "' cannot be installed like this, it is a system module");
         }
 
         // check for jar hell before any copying
@@ -431,7 +458,7 @@ class InstallPluginCommand extends SettingCommand {
         // if it exists, confirm or warn the user
         Path policy = pluginRoot.resolve(PluginInfo.ES_PLUGIN_POLICY);
         if (Files.exists(policy)) {
-            PluginSecurity.readPolicy(policy, terminal, env, isBatch);
+            PluginSecurity.readPolicy(info, policy, terminal, env::tmpFile, isBatch);
         }
 
         return info;
@@ -440,8 +467,7 @@ class InstallPluginCommand extends SettingCommand {
     /** check a candidate plugin for jar hell before installing it */
     void jarHellCheck(Path candidate, Path pluginsDir) throws Exception {
         // create list of current jars in classpath
-        final List<URL> jars = new ArrayList<>();
-        jars.addAll(Arrays.asList(JarHell.parseClassPath()));
+        final Set<URL> jars = new HashSet<>(JarHell.parseClassPath());
 
         // read existing bundles. this does some checks on the installation too.
         PluginsService.getPluginBundles(pluginsDir);
@@ -449,13 +475,15 @@ class InstallPluginCommand extends SettingCommand {
         // add plugin jars to the list
         Path pluginJars[] = FileSystemUtils.files(candidate, "*.jar");
         for (Path jar : pluginJars) {
-            jars.add(jar.toUri().toURL());
+            if (jars.add(jar.toUri().toURL()) == false) {
+                throw new IllegalStateException("jar hell! duplicate plugin jar: " + jar);
+            }
         }
         // TODO: no jars should be an error
         // TODO: verify the classname exists in one of the jars!
 
         // check combined (current classpath + new jars to-be-added)
-        JarHell.checkJarHell(jars.toArray(new URL[jars.size()]));
+        JarHell.checkJarHell(jars);
     }
 
     /**
@@ -468,14 +496,7 @@ class InstallPluginCommand extends SettingCommand {
 
         try {
             PluginInfo info = verify(terminal, tmpRoot, isBatch, env);
-
             final Path destination = env.pluginsFile().resolve(info.getName());
-            if (Files.exists(destination)) {
-                throw new UserException(
-                    ExitCodes.USAGE,
-                    "plugin directory " + destination.toAbsolutePath() +
-                        " already exists. To update the plugin, uninstall it first using 'remove " + info.getName() + "' command");
-            }
 
             Path tmpBinDir = tmpRoot.resolve("bin");
             if (Files.exists(tmpBinDir)) {
@@ -492,15 +513,24 @@ class InstallPluginCommand extends SettingCommand {
             }
 
             Files.move(tmpRoot, destination, StandardCopyOption.ATOMIC_MOVE);
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(destination)) {
-                for (Path pluginFile : stream) {
+            Files.walkFileTree(destination, new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path pluginFile, BasicFileAttributes attrs) throws IOException {
                     if (Files.isDirectory(pluginFile)) {
-                        setFileAttributes(pluginFile, DIR_AND_EXECUTABLE_PERMS);
+                        setFileAttributes(pluginFile, PLUGIN_DIR_PERMS);
                     } else {
-                        setFileAttributes(pluginFile, FILE_PERMS);
+                        // There can also be "bin" directories under the plugin directory, storing native code executables
+                        Path parentDir = pluginFile.getParent().getFileName();
+                        if ("bin".equals(parentDir.toString())) {
+                            setFileAttributes(pluginFile, BIN_FILES_PERMS);
+                        } else {
+                            setFileAttributes(pluginFile, PLUGIN_FILES_PERMS);
+                        }
                     }
+                    return FileVisitResult.CONTINUE;
                 }
-            }
+            });
+
             terminal.println("-> Installed " + info.getName());
 
         } catch (Exception installProblem) {
@@ -516,22 +546,21 @@ class InstallPluginCommand extends SettingCommand {
     /** Copies the files from {@code tmpBinDir} into {@code destBinDir}, along with permissions from dest dirs parent. */
     private void installBin(PluginInfo info, Path tmpBinDir, Path destBinDir) throws Exception {
         if (Files.isDirectory(tmpBinDir) == false) {
-            throw new UserException(ExitCodes.IO_ERROR, "bin in plugin " + info.getName() + " is not a directory");
+            throw new UserException(PLUGIN_MALFORMED, "bin in plugin " + info.getName() + " is not a directory");
         }
         Files.createDirectory(destBinDir);
-        setFileAttributes(destBinDir, DIR_AND_EXECUTABLE_PERMS);
+        setFileAttributes(destBinDir, BIN_DIR_PERMS);
 
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(tmpBinDir)) {
             for (Path srcFile : stream) {
                 if (Files.isDirectory(srcFile)) {
-                    throw new UserException(
-                        ExitCodes.DATA_ERROR,
-                        "Directories not allowed in bin dir for plugin " + info.getName() + ", found " + srcFile.getFileName());
+                    throw new UserException(PLUGIN_MALFORMED, "Directories not allowed in bin dir " +
+                        "for plugin " + info.getName() + ", found " + srcFile.getFileName());
                 }
 
                 Path destFile = destBinDir.resolve(tmpBinDir.relativize(srcFile));
                 Files.copy(srcFile, destFile);
-                setFileAttributes(destFile, DIR_AND_EXECUTABLE_PERMS);
+                setFileAttributes(destFile, BIN_FILES_PERMS);
             }
         }
         IOUtils.rm(tmpBinDir); // clean up what we just copied
@@ -543,11 +572,12 @@ class InstallPluginCommand extends SettingCommand {
      */
     private void installConfig(PluginInfo info, Path tmpConfigDir, Path destConfigDir) throws Exception {
         if (Files.isDirectory(tmpConfigDir) == false) {
-            throw new UserException(ExitCodes.IO_ERROR, "config in plugin " + info.getName() + " is not a directory");
+            throw new UserException(PLUGIN_MALFORMED,
+                "config in plugin " + info.getName() + " is not a directory");
         }
 
         Files.createDirectories(destConfigDir);
-        setFileAttributes(destConfigDir, DIR_AND_EXECUTABLE_PERMS);
+        setFileAttributes(destConfigDir, CONFIG_DIR_PERMS);
         final PosixFileAttributeView destConfigDirAttributesView =
             Files.getFileAttributeView(destConfigDir.getParent(), PosixFileAttributeView.class);
         final PosixFileAttributes destConfigDirAttributes =
@@ -559,13 +589,14 @@ class InstallPluginCommand extends SettingCommand {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(tmpConfigDir)) {
             for (Path srcFile : stream) {
                 if (Files.isDirectory(srcFile)) {
-                    throw new UserException(ExitCodes.DATA_ERROR, "Directories not allowed in config dir for plugin " + info.getName());
+                    throw new UserException(PLUGIN_MALFORMED,
+                        "Directories not allowed in config dir for plugin " + info.getName());
                 }
 
                 Path destFile = destConfigDir.resolve(tmpConfigDir.relativize(srcFile));
                 if (Files.exists(destFile) == false) {
                     Files.copy(srcFile, destFile);
-                    setFileAttributes(destFile, FILE_PERMS);
+                    setFileAttributes(destFile, CONFIG_FILES_PERMS);
                     if (destConfigDirAttributes != null) {
                         setOwnerGroup(destFile, destConfigDirAttributes);
                     }
@@ -592,4 +623,12 @@ class InstallPluginCommand extends SettingCommand {
             Files.setPosixFilePermissions(path, permissions);
         }
     }
+
+    private final List<Path> pathsToDeleteOnShutdown = new ArrayList<>();
+
+    @Override
+    public void close() throws IOException {
+        IOUtils.rm(pathsToDeleteOnShutdown.toArray(new Path[pathsToDeleteOnShutdown.size()]));
+    }
+
 }

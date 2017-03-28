@@ -48,7 +48,7 @@ import org.elasticsearch.index.fielddata.fieldcomparator.BytesRefFieldComparator
 import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperService;
-import org.elasticsearch.index.mapper.internal.ParentFieldMapper;
+import org.elasticsearch.index.mapper.ParentFieldMapper;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
 import org.elasticsearch.search.MultiValueMode;
 
@@ -179,7 +179,7 @@ public class ParentChildIndexFieldData extends AbstractIndexFieldData<AtomicPare
         final OrdinalMap ordMap;
         final AtomicParentChildFieldData[] fieldData;
 
-        public OrdinalMapAndAtomicFieldData(OrdinalMap ordMap, AtomicParentChildFieldData[] fieldData) {
+        OrdinalMapAndAtomicFieldData(OrdinalMap ordMap, AtomicParentChildFieldData[] fieldData) {
             this.ordMap = ordMap;
             this.fieldData = fieldData;
         }
@@ -223,7 +223,7 @@ public class ParentChildIndexFieldData extends AbstractIndexFieldData<AtomicPare
         private final Map<String, OrdinalMapAndAtomicFieldData> atomicFD;
         private final int segmentIndex;
 
-        public GlobalAtomicFieldData(Set<String> types, Map<String, OrdinalMapAndAtomicFieldData> atomicFD, int segmentIndex) {
+        GlobalAtomicFieldData(Set<String> types, Map<String, OrdinalMapAndAtomicFieldData> atomicFD, int segmentIndex) {
             this.types = types;
             this.atomicFD = atomicFD;
             this.segmentIndex = segmentIndex;

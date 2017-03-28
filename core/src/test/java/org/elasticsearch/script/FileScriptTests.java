@@ -26,8 +26,6 @@ import org.elasticsearch.test.ESTestCase;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
 
 // TODO: these really should just be part of ScriptService tests, there is nothing special about them
 public class FileScriptTests extends ESTestCase {
@@ -56,8 +54,8 @@ public class FileScriptTests extends ESTestCase {
         Settings settings = Settings.builder()
             .put("script.engine." + MockScriptEngine.NAME + ".file.aggs", "false").build();
         ScriptService scriptService = makeScriptService(settings);
-        Script script = new Script("script1", ScriptService.ScriptType.FILE, MockScriptEngine.NAME, null);
-        CompiledScript compiledScript = scriptService.compile(script, ScriptContext.Standard.SEARCH, Collections.emptyMap());
+        Script script = new Script(ScriptType.FILE, MockScriptEngine.NAME, "script1", Collections.emptyMap());
+        CompiledScript compiledScript = scriptService.compile(script, ScriptContext.Standard.SEARCH);
         assertNotNull(compiledScript);
         MockCompiledScript executable = (MockCompiledScript) compiledScript.compiled();
         assertEquals("script1.mockscript", executable.getName());
@@ -71,10 +69,10 @@ public class FileScriptTests extends ESTestCase {
             .put("script.engine." + MockScriptEngine.NAME + ".file.update", "false")
             .put("script.engine." + MockScriptEngine.NAME + ".file.ingest", "false").build();
         ScriptService scriptService = makeScriptService(settings);
-        Script script = new Script("script1", ScriptService.ScriptType.FILE, MockScriptEngine.NAME, null);
+        Script script = new Script(ScriptType.FILE, MockScriptEngine.NAME, "script1", Collections.emptyMap());
         for (ScriptContext context : ScriptContext.Standard.values()) {
             try {
-                scriptService.compile(script, context, Collections.emptyMap());
+                scriptService.compile(script, context);
                 fail(context.getKey() + " script should have been rejected");
             } catch(Exception e) {
                 assertTrue(e.getMessage(), e.getMessage().contains("scripts of type [file], operation [" + context.getKey() + "] and lang [" + MockScriptEngine.NAME + "] are disabled"));

@@ -22,7 +22,7 @@ package org.elasticsearch.index.mapper;
 import java.util.List;
 
 import org.apache.lucene.index.Term;
-import org.apache.lucene.queries.TermsQuery;
+import org.apache.lucene.search.TermInSetQuery;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.PrefixQuery;
@@ -46,13 +46,14 @@ public abstract class StringFieldType extends TermBasedFieldType {
         super(ref);
     }
 
+    @Override
     public Query termsQuery(List<?> values, QueryShardContext context) {
         failIfNotIndexed();
         BytesRef[] bytesRefs = new BytesRef[values.size()];
         for (int i = 0; i < bytesRefs.length; i++) {
             bytesRefs[i] = indexedValueForSearch(values.get(i));
         }
-        return new TermsQuery(name(), bytesRefs);
+        return new TermInSetQuery(name(), bytesRefs);
     }
 
     @Override
@@ -85,7 +86,7 @@ public abstract class StringFieldType extends TermBasedFieldType {
     }
 
     @Override
-    public Query rangeQuery(Object lowerTerm, Object upperTerm, boolean includeLower, boolean includeUpper) {
+    public Query rangeQuery(Object lowerTerm, Object upperTerm, boolean includeLower, boolean includeUpper, QueryShardContext context) {
         failIfNotIndexed();
         return new TermRangeQuery(name(),
             lowerTerm == null ? null : indexedValueForSearch(lowerTerm),

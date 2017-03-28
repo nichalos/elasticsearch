@@ -23,13 +23,13 @@ import org.apache.lucene.util.CollectionUtil;
 import org.apache.lucene.util.LuceneTestCase;
 import org.apache.lucene.util.TestUtil;
 import org.elasticsearch.Version;
-import org.elasticsearch.bwcompat.OldIndexBackwardsCompatibilityIT;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.cluster.routing.AllocationId;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.io.FileSystemUtils;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.env.NodeEnvironment;
 import org.elasticsearch.gateway.MetaDataStateFormat;
@@ -39,6 +39,7 @@ import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.shard.ShardPath;
 import org.elasticsearch.index.shard.ShardStateMetaData;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.test.OldIndexUtils;
 
 import java.io.BufferedWriter;
 import java.io.FileNotFoundException;
@@ -211,11 +212,11 @@ public class IndexFolderUpgraderTests extends ESTestCase {
                 throw new IllegalStateException("Backwards index must contain exactly one cluster but was " + list.length);
             }
             // the bwc scripts packs the indices under this path
-            Path src = list[0].resolve("nodes/0/indices/" + indexName);
+            Path src = OldIndexUtils.getIndexDir(logger, indexName, path.getFileName().toString(), list[0]);
             assertTrue("[" + path + "] missing index dir: " + src.toString(), Files.exists(src));
             final Path indicesPath = randomFrom(nodeEnvironment.nodePaths()).indicesPath;
             logger.info("--> injecting index [{}] into [{}]", indexName, indicesPath);
-            OldIndexBackwardsCompatibilityIT.copyIndex(logger, src, indexName, indicesPath);
+            OldIndexUtils.copyIndex(logger, src, src.getFileName().toString(), indicesPath);
             IndexFolderUpgrader.upgradeIndicesIfNeeded(Settings.EMPTY, nodeEnvironment);
 
             // ensure old index folder is deleted
@@ -223,7 +224,7 @@ public class IndexFolderUpgraderTests extends ESTestCase {
             assertEquals(indexFolders.size(), 1);
 
             // ensure index metadata is moved
-            IndexMetaData indexMetaData = IndexMetaData.FORMAT.loadLatestState(logger,
+            IndexMetaData indexMetaData = IndexMetaData.FORMAT.loadLatestState(logger, NamedXContentRegistry.EMPTY,
                 nodeEnvironment.resolveIndexFolder(indexFolders.iterator().next()));
             assertNotNull(indexMetaData);
             Index index = indexMetaData.getIndex();
@@ -265,7 +266,8 @@ public class IndexFolderUpgraderTests extends ESTestCase {
                             int numIdxFiles, int numTranslogFiles) throws IOException {
         final Index index = indexSettings.getIndex();
         // ensure index state can be loaded
-        IndexMetaData loadLatestState = IndexMetaData.FORMAT.loadLatestState(logger, nodeEnv.indexPaths(index));
+        IndexMetaData loadLatestState = IndexMetaData.FORMAT.loadLatestState(logger, NamedXContentRegistry.EMPTY,
+            nodeEnv.indexPaths(index));
         assertNotNull(loadLatestState);
         assertEquals(loadLatestState.getIndex(), index);
         for (int shardId = 0; shardId < indexSettings.getNumberOfShards(); shardId++) {

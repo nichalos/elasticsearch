@@ -21,6 +21,7 @@ package org.elasticsearch.bwcompat;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
 
+import java.util.Arrays;
 import java.util.Collection;
 
 import org.elasticsearch.Version;
@@ -39,7 +40,7 @@ public class IpFieldBwCompatIT extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return pluginList(InternalSettingsPlugin.class); // uses index.merge.enabled
+        return Arrays.asList(InternalSettingsPlugin.class); // uses index.merge.enabled
     }
 
     @Override
@@ -60,7 +61,7 @@ public class IpFieldBwCompatIT extends ESIntegTestCase {
         SearchResponse response = client().prepareSearch("old_index", "new_index")
                 .addSort(SortBuilders.fieldSort("ip_field")).get();
         assertNoFailures(response);
-        assertEquals(3, response.getHits().totalHits());
+        assertEquals(3, response.getHits().getTotalHits());
         assertEquals("::1", response.getHits().getAt(0).getSortValues()[0]);
         assertEquals("127.0.0.1", response.getHits().getAt(1).getSortValues()[0]);
         assertEquals("127.0.0.1", response.getHits().getAt(2).getSortValues()[0]);
@@ -72,7 +73,7 @@ public class IpFieldBwCompatIT extends ESIntegTestCase {
                         .addMaskRange("127.0.0.1/16")
                         .addMaskRange("::1/64")).get();
         assertNoFailures(response);
-        assertEquals(3, response.getHits().totalHits());
+        assertEquals(3, response.getHits().getTotalHits());
         Range range = response.getAggregations().get("ip_range");
         assertEquals(2, range.getBuckets().size());
         assertEquals("::1/64", range.getBuckets().get(0).getKeyAsString());
@@ -85,7 +86,7 @@ public class IpFieldBwCompatIT extends ESIntegTestCase {
         SearchResponse response = client().prepareSearch("old_index", "new_index")
                 .addAggregation(AggregationBuilders.terms("ip_terms").field("ip_field")).get();
         assertNoFailures(response);
-        assertEquals(3, response.getHits().totalHits());
+        assertEquals(3, response.getHits().getTotalHits());
         Terms terms = response.getAggregations().get("ip_terms");
         assertEquals(2, terms.getBuckets().size());
         assertEquals(2, terms.getBucketByKey("127.0.0.1").getDocCount());

@@ -19,48 +19,36 @@
 
 package org.elasticsearch.transport;
 
-import org.elasticsearch.SpecialPermission;
+import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.network.NetworkModule;
+import org.elasticsearch.common.network.NetworkService;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.BigArrays;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
+import org.elasticsearch.http.HttpServerTransport;
 import org.elasticsearch.http.netty4.Netty4HttpServerTransport;
+import org.elasticsearch.indices.breaker.CircuitBreakerService;
+import org.elasticsearch.plugins.NetworkPlugin;
 import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.netty4.Netty4Transport;
+import org.elasticsearch.transport.netty4.Netty4Utils;
 
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
 
-public class Netty4Plugin extends Plugin {
+public class Netty4Plugin extends Plugin implements NetworkPlugin {
+
+    static {
+        Netty4Utils.setup();
+    }
 
     public static final String NETTY_TRANSPORT_NAME = "netty4";
     public static final String NETTY_HTTP_TRANSPORT_NAME = "netty4";
-
-    public Netty4Plugin(Settings settings) {
-        SecurityManager sm = System.getSecurityManager();
-        if (sm != null) {
-            sm.checkPermission(new SpecialPermission());
-        }
-        AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-            try {
-                Class.forName("io.netty.channel.nio.NioEventLoop");
-            } catch (ClassNotFoundException e) {
-                throw new AssertionError(e); // we don't do anything with this
-            }
-            return null;
-        });
-        /*
-         * Asserts that sun.nio.ch.bugLevel has been set to a non-null value. This assertion will fail if the corresponding code
-         * is not executed in a doPrivileged block. This can be disabled via `netty.assert.buglevel` setting which isn't registered
-         * by default but test can do so if they depend on the jar instead of the module.
-         */
-        //TODO Once we have no jar level dependency we can get rid of this.
-        if (settings.getAsBoolean("netty.assert.buglevel", true)) {
-            assert System.getProperty("sun.nio.ch.bugLevel") != null :
-                "sun.nio.ch.bugLevel is null somebody pulls in SelectorUtil without doing stuff in a doPrivileged block?";
-        }
-    }
 
     @Override
     public List<Setting<?>> getSettings() {
@@ -70,10 +58,12 @@ public class Netty4Plugin extends Plugin {
             Netty4HttpServerTransport.SETTING_HTTP_WORKER_COUNT,
             Netty4HttpServerTransport.SETTING_HTTP_TCP_NO_DELAY,
             Netty4HttpServerTransport.SETTING_HTTP_TCP_KEEP_ALIVE,
-            Netty4HttpServerTransport.SETTING_HTTP_TCP_BLOCKING_SERVER,
             Netty4HttpServerTransport.SETTING_HTTP_TCP_REUSE_ADDRESS,
             Netty4HttpServerTransport.SETTING_HTTP_TCP_SEND_BUFFER_SIZE,
             Netty4HttpServerTransport.SETTING_HTTP_TCP_RECEIVE_BUFFER_SIZE,
+            Netty4HttpServerTransport.SETTING_HTTP_NETTY_RECEIVE_PREDICTOR_SIZE,
+            Netty4HttpServerTransport.SETTING_HTTP_NETTY_RECEIVE_PREDICTOR_MIN,
+            Netty4HttpServerTransport.SETTING_HTTP_NETTY_RECEIVE_PREDICTOR_MAX,
             Netty4Transport.WORKER_COUNT,
             Netty4Transport.NETTY_MAX_CUMULATION_BUFFER_CAPACITY,
             Netty4Transport.NETTY_MAX_COMPOSITE_BUFFER_COMPONENTS,
@@ -84,11 +74,33 @@ public class Netty4Plugin extends Plugin {
         );
     }
 
-    public void onModule(NetworkModule networkModule) {
-        if (networkModule.canRegisterHttpExtensions()) {
-            networkModule.registerHttpTransport(NETTY_HTTP_TRANSPORT_NAME, Netty4HttpServerTransport.class);
-        }
-        networkModule.registerTransport(NETTY_TRANSPORT_NAME, Netty4Transport.class);
+    @Override
+    public Settings additionalSettings() {
+        return Settings.builder()
+                // here we set the netty4 transport and http transport as the default. This is a set once setting
+                // ie. if another plugin does that as well the server will fail - only one default network can exist!
+                .put(NetworkModule.HTTP_DEFAULT_TYPE_SETTING.getKey(), NETTY_HTTP_TRANSPORT_NAME)
+                .put(NetworkModule.TRANSPORT_DEFAULT_TYPE_SETTING.getKey(), NETTY_TRANSPORT_NAME)
+                .build();
     }
 
+    @Override
+    public Map<String, Supplier<Transport>> getTransports(Settings settings, ThreadPool threadPool, BigArrays bigArrays,
+                                                          CircuitBreakerService circuitBreakerService,
+                                                          NamedWriteableRegistry namedWriteableRegistry,
+                                                          NetworkService networkService) {
+        return Collections.singletonMap(NETTY_TRANSPORT_NAME, () -> new Netty4Transport(settings, threadPool, networkService, bigArrays,
+            namedWriteableRegistry, circuitBreakerService));
+    }
+
+    @Override
+    public Map<String, Supplier<HttpServerTransport>> getHttpTransports(Settings settings, ThreadPool threadPool, BigArrays bigArrays,
+                                                                        CircuitBreakerService circuitBreakerService,
+                                                                        NamedWriteableRegistry namedWriteableRegistry,
+                                                                        NamedXContentRegistry xContentRegistry,
+                                                                        NetworkService networkService,
+                                                                        HttpServerTransport.Dispatcher dispatcher) {
+        return Collections.singletonMap(NETTY_HTTP_TRANSPORT_NAME,
+            () -> new Netty4HttpServerTransport(settings, networkService, bigArrays, threadPool, xContentRegistry, dispatcher));
+    }
 }

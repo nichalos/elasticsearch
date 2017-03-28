@@ -23,6 +23,7 @@ import org.elasticsearch.common.logging.Loggers;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -100,14 +101,11 @@ public class ParseField {
     /**
      * @param fieldName
      *            the field name to match against this {@link ParseField}
-     * @param strict
-     *            if true an exception will be thrown if a deprecated field name
-     *            is given. If false the deprecated name will be matched but a
-     *            message will also be logged to the {@link DeprecationLogger}
      * @return true if <code>fieldName</code> matches any of the acceptable
      *         names for this {@link ParseField}.
      */
-    boolean match(String fieldName, boolean strict) {
+    public boolean match(String fieldName) {
+        Objects.requireNonNull(fieldName, "fieldName cannot be null");
         // if this parse field has not been completely deprecated then try to
         // match the preferred name
         if (allReplacedWith == null && fieldName.equals(name)) {
@@ -126,11 +124,7 @@ public class ParseField {
                     // message to indicate what should be used instead
                     msg = "Deprecated field [" + fieldName + "] used, replaced by [" + allReplacedWith + "]";
                 }
-                if (strict) {
-                    throw new IllegalArgumentException(msg);
-                } else {
-                    DEPRECATION_LOGGER.deprecated(msg);
-                }
+                DEPRECATION_LOGGER.deprecated(msg);
                 return true;
             }
         }

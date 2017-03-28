@@ -18,7 +18,6 @@
  */
 package org.elasticsearch.transport.netty4;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.lease.Releasables;
@@ -40,13 +39,12 @@ import org.elasticsearch.transport.TransportRequestOptions;
 import org.elasticsearch.transport.TransportResponse;
 import org.elasticsearch.transport.TransportResponseHandler;
 import org.elasticsearch.transport.TransportResponseOptions;
+import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.transport.TransportSettings;
 
 import java.io.IOException;
 import java.util.Collections;
 
-import static java.util.Collections.emptyMap;
-import static java.util.Collections.emptySet;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 
@@ -62,25 +60,24 @@ public class Netty4ScheduledPingTests extends ESTestCase {
 
         CircuitBreakerService circuitBreakerService = new NoneCircuitBreakerService();
 
-        NamedWriteableRegistry registryA = new NamedWriteableRegistry();
+        NamedWriteableRegistry registry = new NamedWriteableRegistry(Collections.emptyList());
         final Netty4Transport nettyA = new Netty4Transport(settings, threadPool, new NetworkService(settings, Collections.emptyList()),
-            BigArrays.NON_RECYCLING_INSTANCE, registryA, circuitBreakerService);
-        MockTransportService serviceA = new MockTransportService(settings, nettyA, threadPool);
+            BigArrays.NON_RECYCLING_INSTANCE, registry, circuitBreakerService);
+        MockTransportService serviceA = new MockTransportService(settings, nettyA, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+                null);
         serviceA.start();
         serviceA.acceptIncomingRequests();
 
-        NamedWriteableRegistry registryB = new NamedWriteableRegistry();
         final Netty4Transport nettyB = new Netty4Transport(settings, threadPool, new NetworkService(settings, Collections.emptyList()),
-            BigArrays.NON_RECYCLING_INSTANCE, registryB, circuitBreakerService);
-        MockTransportService serviceB = new MockTransportService(settings, nettyB, threadPool);
+            BigArrays.NON_RECYCLING_INSTANCE, registry, circuitBreakerService);
+        MockTransportService serviceB = new MockTransportService(settings, nettyB, threadPool, TransportService.NOOP_TRANSPORT_INTERCEPTOR,
+                null);
 
         serviceB.start();
         serviceB.acceptIncomingRequests();
 
-        DiscoveryNode nodeA =
-            new DiscoveryNode("TS_A", "TS_A", serviceA.boundAddress().publishAddress(), emptyMap(), emptySet(), Version.CURRENT);
-        DiscoveryNode nodeB =
-            new DiscoveryNode("TS_B", "TS_B", serviceB.boundAddress().publishAddress(), emptyMap(), emptySet(), Version.CURRENT);
+        DiscoveryNode nodeA = serviceA.getLocalDiscoNode();
+        DiscoveryNode nodeB = serviceB.getLocalDiscoNode();
 
         serviceA.connectToNode(nodeB);
         serviceB.connectToNode(nodeA);

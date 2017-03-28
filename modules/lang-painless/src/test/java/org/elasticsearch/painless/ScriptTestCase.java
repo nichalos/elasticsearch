@@ -19,6 +19,8 @@
 
 package org.elasticsearch.painless;
 
+import junit.framework.AssertionFailedError;
+
 import org.apache.lucene.search.Scorer;
 import org.elasticsearch.common.lucene.ScorerAware;
 import org.elasticsearch.common.settings.Settings;
@@ -26,11 +28,9 @@ import org.elasticsearch.painless.antlr.Walker;
 import org.elasticsearch.script.CompiledScript;
 import org.elasticsearch.script.ExecutableScript;
 import org.elasticsearch.script.ScriptException;
-import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.script.ScriptType;
 import org.elasticsearch.test.ESTestCase;
 import org.junit.Before;
-
-import junit.framework.AssertionFailedError;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -45,7 +45,14 @@ public abstract class ScriptTestCase extends ESTestCase {
 
     @Before
     public void setup() {
-        scriptEngine = new PainlessScriptEngineService(Settings.EMPTY);
+        scriptEngine = new PainlessScriptEngineService(scriptEngineSettings());
+    }
+
+    /**
+     * Settings used to build the script engine. Override to customize settings like {@link RegexTests} does to enable regexes.
+     */
+    protected Settings scriptEngineSettings() {
+        return Settings.EMPTY;
     }
 
     /** Compiles and returns the result of {@code script} */
@@ -69,13 +76,15 @@ public abstract class ScriptTestCase extends ESTestCase {
     public Object exec(String script, Map<String, Object> vars, Map<String,String> compileParams, Scorer scorer, boolean picky) {
         // test for ambiguity errors before running the actual script if picky is true
         if (picky) {
+            ScriptInterface scriptInterface = new ScriptInterface(GenericElasticsearchScript.class);
             CompilerSettings pickySettings = new CompilerSettings();
             pickySettings.setPicky(true);
-            Walker.buildPainlessTree(getTestName(), script, pickySettings, null);
+            pickySettings.setRegexesEnabled(CompilerSettings.REGEX_ENABLED.get(scriptEngineSettings()));
+            Walker.buildPainlessTree(scriptInterface, getTestName(), script, pickySettings, null);
         }
         // test actual script execution
         Object object = scriptEngine.compile(null, script, compileParams);
-        CompiledScript compiled = new CompiledScript(ScriptService.ScriptType.INLINE, getTestName(), "painless", object);
+        CompiledScript compiled = new CompiledScript(ScriptType.INLINE, getTestName(), "painless", object);
         ExecutableScript executableScript = scriptEngine.executable(compiled, vars);
         if (scorer != null) {
             ((ScorerAware)executableScript).setScorer(scorer);

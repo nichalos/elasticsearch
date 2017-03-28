@@ -18,18 +18,16 @@
  */
 package org.elasticsearch.test.rest.yaml.restspec;
 
-import org.elasticsearch.common.xcontent.json.JsonXContent;
-import org.elasticsearch.test.rest.yaml.parser.AbstractParserTestCase;
-import org.elasticsearch.test.rest.yaml.restspec.ClientYamlSuiteRestApi;
-import org.elasticsearch.test.rest.yaml.restspec.ClientYamlSuiteRestApiParser;
+import org.elasticsearch.common.xcontent.yaml.YamlXContent;
+import org.elasticsearch.test.rest.yaml.section.AbstractClientYamlTestFragmentParserTestCase;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 
-public class ClientYamlSuiteRestApiParserTests extends AbstractParserTestCase {
+public class ClientYamlSuiteRestApiParserTests extends AbstractClientYamlTestFragmentParserTestCase {
     public void testParseRestSpecIndexApi() throws Exception {
-        parser = JsonXContent.jsonXContent.createParser(REST_SPEC_INDEX_API);
+        parser = createParser(YamlXContent.yamlXContent, REST_SPEC_INDEX_API);
         ClientYamlSuiteRestApi restApi = new ClientYamlSuiteRestApiParser().parse("location", parser);
 
         assertThat(restApi, notNullValue());
@@ -45,13 +43,13 @@ public class ClientYamlSuiteRestApiParserTests extends AbstractParserTestCase {
         assertThat(restApi.getPathParts().get(1), equalTo("index"));
         assertThat(restApi.getPathParts().get(2), equalTo("type"));
         assertThat(restApi.getParams().size(), equalTo(4));
-        assertThat(restApi.getParams(), contains("consistency", "op_type", "parent", "refresh"));
+        assertThat(restApi.getParams(), contains("wait_for_active_shards", "op_type", "parent", "refresh"));
         assertThat(restApi.isBodySupported(), equalTo(true));
         assertThat(restApi.isBodyRequired(), equalTo(true));
     }
 
     public void testParseRestSpecGetTemplateApi() throws Exception {
-        parser = JsonXContent.jsonXContent.createParser(REST_SPEC_GET_TEMPLATE_API);
+        parser = createParser(YamlXContent.yamlXContent, REST_SPEC_GET_TEMPLATE_API);
         ClientYamlSuiteRestApi restApi = new ClientYamlSuiteRestApiParser().parse("location", parser);
         assertThat(restApi, notNullValue());
         assertThat(restApi.getName(), equalTo("indices.get_template"));
@@ -68,7 +66,7 @@ public class ClientYamlSuiteRestApiParserTests extends AbstractParserTestCase {
     }
 
     public void testParseRestSpecCountApi() throws Exception {
-        parser = JsonXContent.jsonXContent.createParser(REST_SPEC_COUNT_API);
+        parser = createParser(YamlXContent.yamlXContent, REST_SPEC_COUNT_API);
         ClientYamlSuiteRestApi restApi = new ClientYamlSuiteRestApiParser().parse("location", parser);
         assertThat(restApi, notNullValue());
         assertThat(restApi.getName(), equalTo("count"));
@@ -163,10 +161,9 @@ public class ClientYamlSuiteRestApiParserTests extends AbstractParserTestCase {
             "        }\n" +
             "      }   ,\n" +
             "      \"params\": {\n" +
-            "        \"consistency\": {\n" +
-            "          \"type\" : \"enum\",\n" +
-            "          \"options\" : [\"one\", \"quorum\", \"all\"],\n" +
-            "          \"description\" : \"Explicit write consistency setting for the operation\"\n" +
+            "        \"wait_for_active_shards\": {\n" +
+            "          \"type\" : \"string\",\n" +
+            "          \"description\" : \"The number of active shard copies required to perform the operation\"\n" +
             "        },\n" +
             "        \"op_type\": {\n" +
             "          \"type\" : \"enum\",\n" +

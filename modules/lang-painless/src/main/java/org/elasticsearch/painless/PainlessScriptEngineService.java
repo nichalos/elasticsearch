@@ -54,11 +54,6 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
     public static final String NAME = "painless";
 
     /**
-     * Default compiler settings to be used.
-     */
-    private static final CompilerSettings DEFAULT_COMPILER_SETTINGS = new CompilerSettings();
-
-    /**
      * Permissions context used during compilation.
      */
     private static final AccessControlContext COMPILATION_CONTEXT;
@@ -75,11 +70,18 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
     }
 
     /**
+     * Default compiler settings to be used. Note that {@link CompilerSettings} is mutable but this instance shouldn't be mutated outside
+     * of {@link PainlessScriptEngineService#PainlessScriptEngineService(Settings)}.
+     */
+    private final CompilerSettings defaultCompilerSettings = new CompilerSettings();
+
+    /**
      * Constructor.
      * @param settings The settings to initialize the engine with.
      */
     public PainlessScriptEngineService(final Settings settings) {
         super(settings);
+        defaultCompilerSettings.setRegexesEnabled(CompilerSettings.REGEX_ENABLED.get(settings));
     }
 
     /**
@@ -107,31 +109,42 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
 
     @Override
     public Object compile(String scriptName, final String scriptSource, final Map<String, String> params) {
+        return compile(GenericElasticsearchScript.class, scriptName, scriptSource, params);
+    }
+
+    <T> T compile(Class<T> iface, String scriptName, final String scriptSource, final Map<String, String> params) {
         final CompilerSettings compilerSettings;
 
         if (params.isEmpty()) {
             // Use the default settings.
-            compilerSettings = DEFAULT_COMPILER_SETTINGS;
+            compilerSettings = defaultCompilerSettings;
         } else {
             // Use custom settings specified by params.
             compilerSettings = new CompilerSettings();
-            Map<String, String> copy = new HashMap<>(params);
-            String value = copy.remove(CompilerSettings.MAX_LOOP_COUNTER);
 
+            // Except regexes enabled - this is a node level setting and can't be changed in the request.
+            compilerSettings.setRegexesEnabled(defaultCompilerSettings.areRegexesEnabled());
+
+            Map<String, String> copy = new HashMap<>(params);
+
+            String value = copy.remove(CompilerSettings.MAX_LOOP_COUNTER);
             if (value != null) {
                 compilerSettings.setMaxLoopCounter(Integer.parseInt(value));
             }
 
             value = copy.remove(CompilerSettings.PICKY);
-
             if (value != null) {
                 compilerSettings.setPicky(Boolean.parseBoolean(value));
             }
-            
+
             value = copy.remove(CompilerSettings.INITIAL_CALL_SITE_DEPTH);
-            
             if (value != null) {
                 compilerSettings.setInitialCallSiteDepth(Integer.parseInt(value));
+            }
+
+            value = copy.remove(CompilerSettings.REGEX_ENABLED.getKey());
+            if (value != null) {
+                throw new IllegalArgumentException("[painless.regex.enabled] can only be set on node startup.");
             }
 
             if (!copy.isEmpty()) {
@@ -140,11 +153,7 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
         }
 
         // Check we ourselves are not being called by unprivileged code.
-        final SecurityManager sm = System.getSecurityManager();
-
-        if (sm != null) {
-            sm.checkPermission(new SpecialPermission());
-        }
+        SpecialPermission.check();
 
         // Create our loader (which loads compiled code with no permissions).
         final Loader loader = AccessController.doPrivileged(new PrivilegedAction<Loader>() {
@@ -156,13 +165,15 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
 
         try {
             // Drop all permissions to actually compile the code itself.
-            return AccessController.doPrivileged(new PrivilegedAction<Executable>() {
+            return AccessController.doPrivileged(new PrivilegedAction<T>() {
                 @Override
-                public Executable run() {
-                    return Compiler.compile(loader, scriptName == null ? INLINE_NAME : scriptName, scriptSource, compilerSettings);
+                public T run() {
+                    String name = scriptName == null ? INLINE_NAME : scriptName;
+                    return Compiler.compile(loader, iface, name, scriptSource, compilerSettings);
                 }
             }, COMPILATION_CONTEXT);
-        } catch (Exception e) {
+        // Note that it is safe to catch any of the following errors since Painless is stateless.
+        } catch (OutOfMemoryError | StackOverflowError | VerifyError | Exception e) {
             throw convertToScriptException(scriptName == null ? scriptSource : scriptName, scriptSource, e);
         }
     }
@@ -175,7 +186,7 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
      */
     @Override
     public ExecutableScript executable(final CompiledScript compiledScript, final Map<String, Object> vars) {
-        return new ScriptImpl((Executable)compiledScript.compiled(), vars, null);
+        return new ScriptImpl((GenericElasticsearchScript) compiledScript.compiled(), vars, null);
     }
 
     /**
@@ -195,7 +206,7 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
              */
             @Override
             public LeafSearchScript getLeafSearchScript(final LeafReaderContext context) throws IOException {
-                return new ScriptImpl((Executable)compiledScript.compiled(), vars, lookup.getLeafSearchLookup(context));
+                return new ScriptImpl((GenericElasticsearchScript) compiledScript.compiled(), vars, lookup.getLeafSearchLookup(context));
             }
 
             /**
@@ -203,7 +214,7 @@ public final class PainlessScriptEngineService extends AbstractComponent impleme
              */
             @Override
             public boolean needsScores() {
-                return compiledScript.compiled() instanceof NeedsScore;
+                return ((GenericElasticsearchScript) compiledScript.compiled()).uses$_score();
             }
         };
     }

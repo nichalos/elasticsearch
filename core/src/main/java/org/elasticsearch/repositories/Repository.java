@@ -23,14 +23,12 @@ import org.elasticsearch.Version;
 import org.elasticsearch.cluster.metadata.MetaData;
 import org.elasticsearch.cluster.metadata.RepositoryMetaData;
 import org.elasticsearch.cluster.node.DiscoveryNode;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.env.Environment;
-import org.elasticsearch.index.shard.IndexShard;
-import org.elasticsearch.indices.recovery.RecoveryState;
-import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.common.component.LifecycleComponent;
+import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.snapshots.IndexShardSnapshotStatus;
+import org.elasticsearch.indices.recovery.RecoveryState;
+import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.snapshots.SnapshotInfo;
 import org.elasticsearch.snapshots.SnapshotShardFailure;
 
@@ -117,16 +115,19 @@ public interface Repository extends LifecycleComponent {
      * @param failure       global failure reason or null
      * @param totalShards   total number of shards
      * @param shardFailures list of shard failures
+     * @param repositoryStateId the unique id identifying the state of the repository when the snapshot began
      * @return snapshot description
      */
-    SnapshotInfo finalizeSnapshot(SnapshotId snapshotId, List<IndexId> indices, long startTime, String failure, int totalShards, List<SnapshotShardFailure> shardFailures);
+    SnapshotInfo finalizeSnapshot(SnapshotId snapshotId, List<IndexId> indices, long startTime, String failure, int totalShards,
+                                  List<SnapshotShardFailure> shardFailures, long repositoryStateId);
 
     /**
      * Deletes snapshot
      *
      * @param snapshotId snapshot id
+     * @param repositoryStateId the unique id identifying the state of the repository when the snapshot deletion began
      */
-    void deleteSnapshot(SnapshotId snapshotId);
+    void deleteSnapshot(SnapshotId snapshotId, long repositoryStateId);
 
     /**
      * Returns snapshot throttle time in nanoseconds
@@ -174,7 +175,7 @@ public interface Repository extends LifecycleComponent {
     /**
      * Creates a snapshot of the shard based on the index commit point.
      * <p>
-     * The index commit point can be obtained by using {@link org.elasticsearch.index.engine.Engine#snapshotIndex} method.
+     * The index commit point can be obtained by using {@link org.elasticsearch.index.engine.Engine#acquireIndexCommit} method.
      * Repository implementations shouldn't release the snapshot index commit point. It is done by the method caller.
      * <p>
      * As snapshot process progresses, implementation of this method should update {@link IndexShardSnapshotStatus} object and check

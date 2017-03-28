@@ -25,18 +25,20 @@ import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.DisjunctionMaxQuery;
 import org.apache.lucene.search.FuzzyQuery;
+import org.apache.lucene.search.IndexOrDocValuesQuery;
 import org.apache.lucene.search.LegacyNumericRangeQuery;
 import org.apache.lucene.search.MatchAllDocsQuery;
+import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.PhraseQuery;
 import org.apache.lucene.search.PointRangeQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.lucene.all.AllTermQuery;
-import org.elasticsearch.common.lucene.search.MatchNoDocsQuery;
 import org.elasticsearch.common.lucene.search.MultiPhrasePrefixQuery;
 import org.elasticsearch.index.query.MultiMatchQueryBuilder.Type;
 import org.elasticsearch.index.search.MatchQuery;
+import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.test.AbstractQueryTestCase;
 
 import java.io.IOException;
@@ -142,7 +144,7 @@ public class MultiMatchQueryBuilderTests extends AbstractQueryTestCase<MultiMatc
     }
 
     @Override
-    protected void doAssertLuceneQuery(MultiMatchQueryBuilder queryBuilder, Query query, QueryShardContext context) throws IOException {
+    protected void doAssertLuceneQuery(MultiMatchQueryBuilder queryBuilder, Query query, SearchContext context) throws IOException {
         // we rely on integration tests for deeper checks here
         assertThat(query, either(instanceOf(BoostQuery.class)).or(instanceOf(TermQuery.class)).or(instanceOf(AllTermQuery.class))
                 .or(instanceOf(BooleanQuery.class)).or(instanceOf(DisjunctionMaxQuery.class))
@@ -150,37 +152,14 @@ public class MultiMatchQueryBuilderTests extends AbstractQueryTestCase<MultiMatc
                 .or(instanceOf(MatchAllDocsQuery.class)).or(instanceOf(ExtendedCommonTermsQuery.class))
                 .or(instanceOf(MatchNoDocsQuery.class)).or(instanceOf(PhraseQuery.class))
                 .or(instanceOf(LegacyNumericRangeQuery.class))
-                .or(instanceOf(PointRangeQuery.class)));
+                .or(instanceOf(PointRangeQuery.class)).or(instanceOf(IndexOrDocValuesQuery.class)));
     }
 
     public void testIllegaArguments() {
-        try {
-            new MultiMatchQueryBuilder(null, "field");
-            fail("value must not be null");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
-
-        try {
-            new MultiMatchQueryBuilder("value", (String[]) null);
-            fail("initial fields must be supplied at construction time must not be null");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
-
-        try {
-            new MultiMatchQueryBuilder("value", new String[]{""});
-            fail("field names cannot be empty");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
-
-        try {
-            new MultiMatchQueryBuilder("value", "field").type(null);
-            fail("type must not be null");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
+        expectThrows(IllegalArgumentException.class, () -> new MultiMatchQueryBuilder(null, "field"));
+        expectThrows(IllegalArgumentException.class, () -> new MultiMatchQueryBuilder("value", (String[]) null));
+        expectThrows(IllegalArgumentException.class, () -> new MultiMatchQueryBuilder("value", new String[]{""}));
+        expectThrows(IllegalArgumentException.class, () -> new MultiMatchQueryBuilder("value", "field").type(null));
     }
 
     public void testToQueryBoost() throws IOException {
@@ -293,7 +272,7 @@ public class MultiMatchQueryBuilderTests extends AbstractQueryTestCase<MultiMatc
                     "}";
 
             ParsingException e = expectThrows(ParsingException.class, () -> parseQuery(json));
-            assertEquals("Fuziness not allowed for type [" + type +"]", e.getMessage());
+            assertEquals("Fuzziness not allowed for type [" + type +"]", e.getMessage());
         }
     }
 

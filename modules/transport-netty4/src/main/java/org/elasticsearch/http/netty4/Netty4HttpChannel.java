@@ -20,6 +20,7 @@
 package org.elasticsearch.http.netty4;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelPromise;
@@ -29,6 +30,7 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
@@ -87,13 +89,17 @@ final class Netty4HttpChannel extends AbstractRestChannel {
         return new ReleasableBytesStreamOutput(transport.bigArrays);
     }
 
-
     @Override
     public void sendResponse(RestResponse response) {
         // if the response object was created upstream, then use it;
         // otherwise, create a new one
         ByteBuf buffer = Netty4Utils.toByteBuf(response.content());
-        FullHttpResponse resp = newResponse(buffer);
+        final FullHttpResponse resp;
+        if (HttpMethod.HEAD.equals(nettyRequest.method())) {
+            resp = newResponse(Unpooled.EMPTY_BUFFER);
+        } else {
+            resp = newResponse(buffer);
+        }
         resp.setStatus(getStatus(response.status()));
 
         Netty4CorsHandler.setCorsResponseHeaders(nettyRequest, resp, transport.getCorsConfig());
@@ -121,19 +127,20 @@ final class Netty4HttpChannel extends AbstractRestChannel {
 
             if (release) {
                 promise.addListener(f -> ((Releasable)content).close());
-                release = false;
             }
 
             if (isCloseConnection()) {
                 promise.addListener(ChannelFutureListener.CLOSE);
             }
 
+            final Object msg;
             if (pipelinedRequest != null) {
-                channel.writeAndFlush(pipelinedRequest.createHttpResponse(resp, promise));
+                msg = pipelinedRequest.createHttpResponse(resp, promise);
             } else {
-                channel.writeAndFlush(resp, promise);
+                msg = resp;
             }
-
+            channel.writeAndFlush(msg, promise);
+            release = false;
         } finally {
             if (release) {
                 ((Releasable) content).close();
@@ -185,8 +192,8 @@ final class Netty4HttpChannel extends AbstractRestChannel {
     // Determine if the request connection should be closed on completion.
     private boolean isCloseConnection() {
         final boolean http10 = isHttp10();
-        return HttpHeaderValues.CLOSE.equals(nettyRequest.headers().get(HttpHeaderNames.CONNECTION)) ||
-            (http10 && HttpHeaderValues.KEEP_ALIVE.equals(nettyRequest.headers().get(HttpHeaderNames.CONNECTION)) == false);
+        return HttpHeaderValues.CLOSE.contentEqualsIgnoreCase(nettyRequest.headers().get(HttpHeaderNames.CONNECTION)) ||
+            (http10 && !HttpHeaderValues.KEEP_ALIVE.contentEqualsIgnoreCase(nettyRequest.headers().get(HttpHeaderNames.CONNECTION)));
     }
 
     // Create a new {@link HttpResponse} to transmit the response for the netty request.

@@ -20,40 +20,52 @@ package org.elasticsearch.rest.action.admin.cluster;
 
 import org.elasticsearch.action.admin.cluster.storedscripts.PutStoredScriptRequest;
 import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.rest.BaseRestHandler;
-import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.support.AcknowledgedRestListener;
+import org.elasticsearch.rest.action.AcknowledgedRestListener;
+
+import java.io.IOException;
 
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 import static org.elasticsearch.rest.RestRequest.Method.PUT;
 
 public class RestPutStoredScriptAction extends BaseRestHandler {
 
-    @Inject
     public RestPutStoredScriptAction(Settings settings, RestController controller) {
-        this(settings, controller, true);
-    }
-
-    protected RestPutStoredScriptAction(Settings settings, RestController controller, boolean registerDefaultHandlers) {
         super(settings);
-        if (registerDefaultHandlers) {
-            controller.registerHandler(POST, "/_scripts/{lang}/{id}", this);
-            controller.registerHandler(PUT, "/_scripts/{lang}/{id}", this);
-        }
-    }
 
-    protected String getScriptLang(RestRequest request) {
-        return request.param("lang");
+        // Note {lang} is actually {id} in the first two handlers.  It appears
+        // parameters as part of the path must be of the same ordering relative
+        // to name or they will not work as expected.
+        controller.registerHandler(POST, "/_scripts/{lang}", this);
+        controller.registerHandler(PUT, "/_scripts/{lang}", this);
+        controller.registerHandler(POST, "/_scripts/{lang}/{id}", this);
+        controller.registerHandler(PUT, "/_scripts/{lang}/{id}", this);
     }
 
     @Override
-    public void handleRequest(final RestRequest request, final RestChannel channel, NodeClient client) {
-        PutStoredScriptRequest putRequest = new PutStoredScriptRequest(getScriptLang(request), request.param("id"));
-        putRequest.script(request.content());
-        client.admin().cluster().putStoredScript(putRequest, new AcknowledgedRestListener<>(channel));
+    public RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
+        String id = request.param("id");
+        String lang = request.param("lang");
+
+        // In the case where only {lang} is not null, we make it {id} because of
+        // name ordering issues in the handlers' paths.
+        if (id == null) {
+            id = lang;
+            lang = null;
+        }
+
+        BytesReference content = request.content();
+
+        if (lang != null) {
+            deprecationLogger.deprecated(
+                "specifying lang [" + lang + "] as part of the url path is deprecated, use request content instead");
+        }
+
+        PutStoredScriptRequest putRequest = new PutStoredScriptRequest(id, lang, content, request.getXContentType());
+        return channel -> client.admin().cluster().putStoredScript(putRequest, new AcknowledgedRestListener<>(channel));
     }
 }

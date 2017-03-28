@@ -122,6 +122,13 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                 "last_name", "",
                 "category", "marvel hero",
                 "skill", 1));
+
+        builders.add(client().prepareIndex("test", "test", "nowHero").setSource(
+                "full_name", "now sort of",
+                "first_name", "now",
+                "last_name", "",
+                "category", "marvel hero",
+                "skill", 1));
         List<String> firstNames = new ArrayList<>();
         fill(firstNames, "Captain", between(15, 25));
         fill(firstNames, "Ultimate", between(5, 10));
@@ -164,6 +171,9 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                 .field("norms", false)
                 .field("copy_to", "last_name_phrase")
                 .endObject()
+                .startObject("date")
+                .field("type", "date")
+                .endObject()
                 .endObject()
                 .endObject().endObject();
     }
@@ -174,19 +184,19 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                 .setQuery(randomizeType(multiMatchQuery("marvel hero captain america", "full_name", "first_name", "last_name", "category")
                         .operator(Operator.OR))).get();
         Set<String> topNIds = Sets.newHashSet("theone", "theother");
-        for (int i = 0; i < searchResponse.getHits().hits().length; i++) {
+        for (int i = 0; i < searchResponse.getHits().getHits().length; i++) {
             topNIds.remove(searchResponse.getHits().getAt(i).getId());
             // very likely that we hit a random doc that has the same score so orders are random since
             // the doc id is the tie-breaker
         }
         assertThat(topNIds, empty());
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThan(searchResponse.getHits().getHits()[1].getScore()));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("marvel hero captain america", "full_name", "first_name", "last_name", "category")
                         .operator(Operator.OR).useDisMax(false).type(type))).get();
         assertFirstHit(searchResponse, anyOf(hasId("theone"), hasId("theother")));
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThan(searchResponse.getHits().getHits()[1].getScore()));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("marvel hero", "full_name", "first_name", "last_name", "category")
@@ -260,8 +270,8 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                     .addSort("_uid", SortOrder.ASC)
                     .setQuery(multiMatchQueryBuilder).get();
             MatchQueryBuilder matchQueryBuilder = QueryBuilders.matchQuery(field, builder.toString());
-            if (getType(multiMatchQueryBuilder) != null) {
-                matchQueryBuilder.type(MatchQuery.Type.valueOf(getType(multiMatchQueryBuilder).matchQueryType().toString()));
+            if (multiMatchQueryBuilder.getType() != null) {
+                matchQueryBuilder.type(MatchQuery.Type.valueOf(multiMatchQueryBuilder.getType().matchQueryType().toString()));
             }
             SearchResponse matchResp = client().prepareSearch("test")
                     // _uid tie sort
@@ -271,10 +281,10 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
             assertThat("field: " + field + " query: " + builder.toString(), multiMatchResp.getHits().getTotalHits(), equalTo(matchResp.getHits().getTotalHits()));
             SearchHits hits = multiMatchResp.getHits();
             if (field.startsWith("missing")) {
-                assertEquals(0, hits.hits().length);
+                assertEquals(0, hits.getHits().length);
             }
-            for (int j = 0; j < hits.hits().length; j++) {
-                assertThat(hits.getHits()[j].score(), equalTo(matchResp.getHits().getHits()[j].score()));
+            for (int j = 0; j < hits.getHits().length; j++) {
+                assertThat(hits.getHits()[j].getScore(), equalTo(matchResp.getHits().getHits()[j].getScore()));
                 assertThat(hits.getHits()[j].getId(), equalTo(matchResp.getHits().getHits()[j].getId()));
             }
         }
@@ -283,27 +293,27 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
 
     public void testCutoffFreq() throws ExecutionException, InterruptedException {
         final long numDocs = client().prepareSearch("test").setSize(0)
-                .setQuery(matchAllQuery()).get().getHits().totalHits();
+                .setQuery(matchAllQuery()).get().getHits().getTotalHits();
         MatchQuery.Type type = randomBoolean() ? MatchQueryBuilder.DEFAULT_TYPE : MatchQuery.Type.BOOLEAN;
         Float cutoffFrequency = randomBoolean() ? Math.min(1, numDocs * 1.f / between(10, 20)) : 1.f / between(10, 20);
         SearchResponse searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("marvel hero captain america", "full_name", "first_name", "last_name", "category")
                         .operator(Operator.OR).cutoffFrequency(cutoffFrequency))).get();
         Set<String> topNIds = Sets.newHashSet("theone", "theother");
-        for (int i = 0; i < searchResponse.getHits().hits().length; i++) {
+        for (int i = 0; i < searchResponse.getHits().getHits().length; i++) {
             topNIds.remove(searchResponse.getHits().getAt(i).getId());
             // very likely that we hit a random doc that has the same score so orders are random since
             // the doc id is the tie-breaker
         }
         assertThat(topNIds, empty());
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThanOrEqualTo(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThanOrEqualTo(searchResponse.getHits().getHits()[1].getScore()));
 
         cutoffFrequency = randomBoolean() ? Math.min(1, numDocs * 1.f / between(10, 20)) : 1.f / between(10, 20);
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("marvel hero captain america", "full_name", "first_name", "last_name", "category")
                         .operator(Operator.OR).useDisMax(false).cutoffFrequency(cutoffFrequency).type(type))).get();
         assertFirstHit(searchResponse, anyOf(hasId("theone"), hasId("theother")));
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThan(searchResponse.getHits().getHits()[1].getScore()));
         long size = searchResponse.getHits().getTotalHits();
 
         searchResponse = client().prepareSearch("test")
@@ -343,7 +353,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
     public void testEquivalence() {
 
         final int numDocs = (int) client().prepareSearch("test").setSize(0)
-                .setQuery(matchAllQuery()).get().getHits().totalHits();
+                .setQuery(matchAllQuery()).get().getHits().getTotalHits();
         int numIters = scaledRandomIntBetween(5, 10);
         for (int i = 0; i < numIters; i++) {
             {
@@ -445,7 +455,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                         .operator(Operator.OR))).get();
         assertFirstHit(searchResponse, hasId("theother"));
         assertSecondHit(searchResponse, hasId("theone"));
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThan(searchResponse.getHits().getHits()[1].getScore()));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("marvel hero", "full_name", "first_name", "last_name", "category")
@@ -534,7 +544,7 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                         .analyzer("category")
                         .operator(Operator.OR))).get();
         assertFirstHit(searchResponse, anyOf(hasId("theother"), hasId("theone")));
-        long numResults = searchResponse.getHits().totalHits();
+        long numResults = searchResponse.getHits().getTotalHits();
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("captain america marvel hero", "first_name", "last_name", "category")
@@ -569,12 +579,13 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
 
         // test if boosts work
         searchResponse = client().prepareSearch("test")
-                .setQuery(randomizeType(multiMatchQuery("the ultimate", "full_name", "first_name", "last_name", "category").field("last_name", 10)
+                .setQuery(randomizeType(multiMatchQuery("the ultimate", "full_name", "first_name", "category").field("last_name", 10)
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS)
                         .operator(Operator.AND))).get();
+        assertHitCount(searchResponse, 2L);
         assertFirstHit(searchResponse, hasId("ultimate1"));   // has ultimate in the last_name and that is boosted
         assertSecondHit(searchResponse, hasId("ultimate2"));
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThan(searchResponse.getHits().getHits()[1].getScore()));
 
         // since we try to treat the matching fields as one field scores are very similar but we have a small bias towards the
         // more frequent field that acts as a tie-breaker internally
@@ -582,36 +593,42 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                 .setQuery(randomizeType(multiMatchQuery("the ultimate", "full_name", "first_name", "last_name", "category")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS)
                         .operator(Operator.AND))).get();
+        assertHitCount(searchResponse, 2L);
         assertFirstHit(searchResponse, hasId("ultimate2"));
         assertSecondHit(searchResponse, hasId("ultimate1"));
-        assertThat(searchResponse.getHits().hits()[0].getScore(), greaterThan(searchResponse.getHits().hits()[1].getScore()));
+        assertThat(searchResponse.getHits().getHits()[0].getScore(), greaterThan(searchResponse.getHits().getHits()[1].getScore()));
 
         // Test group based on numeric fields
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("15", "skill")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS))).get();
+        assertHitCount(searchResponse, 1L);
         assertFirstHit(searchResponse, hasId("theone"));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("15", "skill", "first_name")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS))).get();
+        assertHitCount(searchResponse, 1L);
         assertFirstHit(searchResponse, hasId("theone"));
 
         // Two numeric fields together caused trouble at one point!
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("15", "int-field", "skill")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS))).get();
+        assertHitCount(searchResponse, 1L);
         assertFirstHit(searchResponse, hasId("theone"));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("15", "int-field", "first_name", "skill")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS))).get();
+        assertHitCount(searchResponse, 1L);
         assertFirstHit(searchResponse, hasId("theone"));
 
         searchResponse = client().prepareSearch("test")
                 .setQuery(randomizeType(multiMatchQuery("alpha 15", "first_name", "skill")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS)
                         .lenient(true))).get();
+        assertHitCount(searchResponse, 1L);
         assertFirstHit(searchResponse, hasId("ultimate1"));
         /*
          * Doesn't find theone because "alpha 15" isn't a number and we don't
@@ -624,7 +641,54 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
                 .setQuery(randomizeType(multiMatchQuery("alpha 15", "int-field", "first_name", "skill")
                         .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS)
                         .lenient(true))).get();
+        assertHitCount(searchResponse, 1L);
         assertFirstHit(searchResponse, hasId("ultimate1"));
+
+
+        // Check that cross fields works with date fields
+        searchResponse = client().prepareSearch("test")
+                .setQuery(randomizeType(multiMatchQuery("now", "f*", "date")
+                        .type(MultiMatchQueryBuilder.Type.CROSS_FIELDS)).lenient(true))
+                .get();
+        assertHitCount(searchResponse, 1L);
+        assertFirstHit(searchResponse, hasId("nowHero"));
+    }
+
+    /**
+     * Test for edge case where field level boosting is applied to field that doesn't exist on documents on
+     * one shard. There was an issue reported in https://github.com/elastic/elasticsearch/issues/18710 where a
+     * `multi_match` query using the fuzziness parameter with a boost on one of two fields returns the
+     * same document score if both documents are placed on different shard. This test recreates that scenario
+     * and checks that the returned scores are different.
+     */
+    public void testFuzzyFieldLevelBoosting() throws InterruptedException, ExecutionException {
+        String idx = "test18710";
+        CreateIndexRequestBuilder builder = prepareCreate(idx).setSettings(Settings.builder()
+                .put(indexSettings())
+                .put(SETTING_NUMBER_OF_SHARDS, 3)
+                .put(SETTING_NUMBER_OF_REPLICAS, 0)
+                );
+        assertAcked(builder.addMapping("type", "title", "type=text", "body", "type=text"));
+        ensureGreen();
+        List<IndexRequestBuilder> builders = new ArrayList<>();
+        builders.add(client().prepareIndex(idx, "type", "1").setSource(
+                "title", "foo",
+                "body", "bar"));
+        builders.add(client().prepareIndex(idx, "type", "2").setSource(
+                "title", "bar",
+                "body", "foo"));
+        indexRandom(true, false, builders);
+
+        SearchResponse searchResponse = client().prepareSearch(idx)
+                .setExplain(true)
+                .setQuery(multiMatchQuery("foo").field("title", 100).field("body")
+                        .fuzziness(0)
+                        ).get();
+        SearchHit[] hits = searchResponse.getHits().getHits();
+        assertNotEquals("both documents should be on different shards", hits[0].getShard().getShardId(), hits[1].getShard().getShardId());
+        assertEquals("1", hits[0].getId());
+        assertEquals("2", hits[1].getId());
+        assertThat(hits[0].getScore(), greaterThan(hits[1].getScore()));
     }
 
     private static void assertEquivalent(String query, SearchResponse left, SearchResponse right) {
@@ -647,21 +711,21 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
         }
     }
 
-    public static List<String> fill(List<String> list, String value, int times) {
+    private static List<String> fill(List<String> list, String value, int times) {
         for (int i = 0; i < times; i++) {
             list.add(value);
         }
         return list;
     }
 
-    public List<String> fillRandom(List<String> list, int times) {
+    private static List<String> fillRandom(List<String> list, int times) {
         for (int i = 0; i < times; i++) {
-            list.add(randomAsciiOfLengthBetween(1, 5));
+            list.add(randomAsciiOfLength(5));
         }
         return list;
     }
 
-    public <T> T randomPickExcept(List<T> fromList, T butNot) {
+    private static <T> T randomPickExcept(List<T> fromList, T butNot) {
         while (true) {
             T t = RandomPicks.randomFrom(random(), fromList);
             if (t.equals(butNot)) {
@@ -671,9 +735,9 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
         }
     }
 
-    public MultiMatchQueryBuilder randomizeType(MultiMatchQueryBuilder builder) {
+    private static MultiMatchQueryBuilder randomizeType(MultiMatchQueryBuilder builder) {
         try {
-            MultiMatchQueryBuilder.Type type = getType(builder);
+            MultiMatchQueryBuilder.Type type = builder.getType();
             if (type == null && randomBoolean()) {
                 return builder;
             }
@@ -714,9 +778,5 @@ public class MultiMatchQueryIT extends ESIntegTestCase {
         } catch (Exception ex) {
             throw new RuntimeException(ex);
         }
-    }
-
-    private MultiMatchQueryBuilder.Type getType(MultiMatchQueryBuilder builder) throws NoSuchFieldException, IllegalAccessException {
-        return builder.getType();
     }
 }

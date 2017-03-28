@@ -20,16 +20,20 @@ package org.elasticsearch.script.mustache;
 
 import com.github.mustachejava.Mustache;
 import com.github.mustachejava.MustacheFactory;
+
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.SpecialPermission;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.io.FastStringReader;
 import org.elasticsearch.common.io.UTF8StreamWriter;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
-import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.logging.ESLoggerFactory;
 import org.elasticsearch.script.CompiledScript;
 import org.elasticsearch.script.ExecutableScript;
 import org.elasticsearch.script.GeneralScriptException;
+import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptEngineService;
 import org.elasticsearch.script.SearchScript;
 import org.elasticsearch.search.lookup.SearchLookup;
@@ -49,13 +53,10 @@ import java.util.Map;
  * process: First compile the string representing the template, the resulting
  * {@link Mustache} object can then be re-used for subsequent executions.
  */
-public final class MustacheScriptEngineService extends AbstractComponent implements ScriptEngineService {
+public final class MustacheScriptEngineService implements ScriptEngineService {
+    private static final Logger logger = ESLoggerFactory.getLogger(MustacheScriptEngineService.class);
 
     public static final String NAME = "mustache";
-
-    static final String CONTENT_TYPE_PARAM = "content_type";
-    static final String JSON_CONTENT_TYPE = "application/json";
-    static final String PLAIN_TEXT_CONTENT_TYPE = "text/plain";
 
     /** Thread local UTF8StreamWriter to store template execution results in, thread local to save object creation.*/
     private static ThreadLocal<SoftReference<UTF8StreamWriter>> utf8StreamWriter = new ThreadLocal<>();
@@ -73,29 +74,24 @@ public final class MustacheScriptEngineService extends AbstractComponent impleme
     }
 
     /**
-     * @param settings automatically wired by Guice.
-     * */
-    public MustacheScriptEngineService(Settings settings) {
-        super(settings);
-    }
-
-    /**
      * Compile a template string to (in this case) a Mustache object than can
      * later be re-used for execution to fill in missing parameter values.
      *
-     * @param templateSource
-     *            a string representing the template to compile.
+     * @param templateSource a string representing the template to compile.
      * @return a compiled template object for later execution.
      * */
     @Override
     public Object compile(String templateName, String templateSource, Map<String, String> params) {
-        final MustacheFactory factory = new CustomMustacheFactory(isJsonEscapingEnabled(params));
+        final MustacheFactory factory = createMustacheFactory(params);
         Reader reader = new FastStringReader(templateSource);
         return factory.compile(reader, "query-template");
     }
 
-    private boolean isJsonEscapingEnabled(Map<String, String> params) {
-        return JSON_CONTENT_TYPE.equals(params.getOrDefault(CONTENT_TYPE_PARAM, JSON_CONTENT_TYPE));
+    private CustomMustacheFactory createMustacheFactory(Map<String, String> params) {
+        if (params == null || params.isEmpty() || params.containsKey(Script.CONTENT_TYPE_OPTION) == false) {
+            return new CustomMustacheFactory();
+        }
+        return new CustomMustacheFactory(params.get(Script.CONTENT_TYPE_OPTION));
     }
 
     @Override
@@ -125,9 +121,6 @@ public final class MustacheScriptEngineService extends AbstractComponent impleme
         // Nothing to do here
     }
 
-    // permission checked before doing crazy reflection
-    static final SpecialPermission SPECIAL_PERMISSION = new SpecialPermission();
-
     /**
      * Used at query execution time by script service in order to execute a query template.
      * */
@@ -141,9 +134,9 @@ public final class MustacheScriptEngineService extends AbstractComponent impleme
          * @param template the compiled template object wrapper
          * @param vars the parameters to fill above object with
          **/
-        public MustacheExecutableScript(CompiledScript template, Map<String, Object> vars) {
+        MustacheExecutableScript(CompiledScript template, Map<String, Object> vars) {
             this.template = template;
-            this.vars = vars == null ? Collections.<String, Object>emptyMap() : vars;
+            this.vars = vars == null ? Collections.emptyMap() : vars;
         }
 
         @Override
@@ -156,16 +149,13 @@ public final class MustacheScriptEngineService extends AbstractComponent impleme
             final BytesStreamOutput result = new BytesStreamOutput();
             try (UTF8StreamWriter writer = utf8StreamWriter().setOutput(result)) {
                 // crazy reflection here
-                SecurityManager sm = System.getSecurityManager();
-                if (sm != null) {
-                    sm.checkPermission(SPECIAL_PERMISSION);
-                }
+                SpecialPermission.check();
                 AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
                     ((Mustache) template.compiled()).execute(writer, vars);
                     return null;
                 });
             } catch (Exception e) {
-                logger.error("Error running {}", e, template);
+                logger.error((Supplier<?>) () -> new ParameterizedMessage("Error running {}", template), e);
                 throw new GeneralScriptException("Error running " + template, e);
             }
             return result.bytes();

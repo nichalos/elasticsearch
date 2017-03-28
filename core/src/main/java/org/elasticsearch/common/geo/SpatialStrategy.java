@@ -24,9 +24,6 @@ import org.elasticsearch.common.io.stream.Writeable;
 
 import java.io.IOException;
 
-/**
- *
- */
 public enum SpatialStrategy implements Writeable {
 
     TERM("term"),
@@ -34,7 +31,7 @@ public enum SpatialStrategy implements Writeable {
 
     private final String strategyName;
 
-    private SpatialStrategy(String strategyName) {
+    SpatialStrategy(String strategyName) {
         this.strategyName = strategyName;
     }
 

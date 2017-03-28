@@ -19,11 +19,12 @@
 
 package org.elasticsearch.repositories.s3;
 
-import com.amazonaws.Protocol;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.DeleteObjectsRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
+import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.action.admin.cluster.repositories.put.PutRepositoryResponse;
 import org.elasticsearch.action.admin.cluster.snapshots.create.CreateSnapshotResponse;
 import org.elasticsearch.action.admin.cluster.snapshots.restore.RestoreSnapshotResponse;
@@ -106,9 +107,9 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
             index("test-idx-3", "doc", Integer.toString(i), "foo", "baz" + i);
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
 
         logger.info("--> snapshot");
         CreateSnapshotResponse createSnapshotResponse = client.admin().cluster().prepareCreateSnapshot("test-repo", "test-snap").setWaitForCompletion(true).setIndices("test-idx-*", "-test-idx-3").get();
@@ -128,9 +129,9 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
             client.prepareDelete("test-idx-3", "doc", Integer.toString(i)).get();
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(50L));
-        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().totalHits(), equalTo(50L));
-        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().totalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
 
         logger.info("--> close indices");
         client.admin().indices().prepareClose("test-idx-1", "test-idx-2").get();
@@ -140,9 +141,9 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
         assertThat(restoreSnapshotResponse.getRestoreInfo().totalShards(), greaterThan(0));
 
         ensureGreen();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().totalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
 
         // Test restore after index deletion
         logger.info("--> delete indices");
@@ -151,7 +152,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
         restoreSnapshotResponse = client.admin().cluster().prepareRestoreSnapshot("test-repo", "test-snap").setWaitForCompletion(true).setIndices("test-idx-*", "-test-idx-2").execute().actionGet();
         assertThat(restoreSnapshotResponse.getRestoreInfo().totalShards(), greaterThan(0));
         ensureGreen();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
         ClusterState clusterState = client.admin().cluster().prepareState().get().getState();
         assertThat(clusterState.getMetaData().hasIndex("test-idx-1"), equalTo(true));
         assertThat(clusterState.getMetaData().hasIndex("test-idx-2"), equalTo(false));
@@ -161,12 +162,15 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
     public void testEncryption() {
         Client client = client();
         logger.info("-->  creating s3 repository with bucket[{}] and path [{}]", internalCluster().getInstance(Settings.class).get("repositories.s3.bucket"), basePath);
+
+        Settings repositorySettings = Settings.builder()
+            .put(S3Repository.Repository.BASE_PATH_SETTING.getKey(), basePath)
+            .put(S3Repository.Repository.CHUNK_SIZE_SETTING.getKey(), randomIntBetween(1000, 10000))
+            .put(S3Repository.Repository.SERVER_SIDE_ENCRYPTION_SETTING.getKey(), true)
+            .build();
+
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
-                .setType("s3").setSettings(Settings.builder()
-                        .put(S3Repository.Repository.BASE_PATH_SETTING.getKey(), basePath)
-                        .put(S3Repository.Repository.CHUNK_SIZE_SETTING.getKey(), randomIntBetween(1000, 10000))
-                        .put(S3Repository.Repository.SERVER_SIDE_ENCRYPTION_SETTING.getKey(), true)
-                        ).get();
+                .setType("s3").setSettings(repositorySettings).get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
         createIndex("test-idx-1", "test-idx-2", "test-idx-3");
@@ -179,9 +183,9 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
             index("test-idx-3", "doc", Integer.toString(i), "foo", "baz" + i);
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
 
         logger.info("--> snapshot");
         CreateSnapshotResponse createSnapshotResponse = client.admin().cluster().prepareCreateSnapshot("test-repo", "test-snap").setWaitForCompletion(true).setIndices("test-idx-*", "-test-idx-3").get();
@@ -192,13 +196,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
 
         Settings settings = internalCluster().getInstance(Settings.class);
         Settings bucket = settings.getByPrefix("repositories.s3.");
-        AmazonS3 s3Client = internalCluster().getInstance(AwsS3Service.class).client(
-            null,
-            S3Repository.Repositories.PROTOCOL_SETTING.get(settings),
-            S3Repository.Repositories.REGION_SETTING.get(settings),
-            S3Repository.Repositories.KEY_SETTING.get(settings),
-            S3Repository.Repositories.SECRET_SETTING.get(settings),
-            null, randomBoolean(), null);
+        AmazonS3 s3Client = internalCluster().getInstance(AwsS3Service.class).client(repositorySettings, null, randomBoolean(), null);
 
         String bucketName = bucket.get("bucket");
         logger.info("--> verify encryption for bucket [{}], prefix [{}]", bucketName, basePath);
@@ -218,9 +216,9 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
             client.prepareDelete("test-idx-3", "doc", Integer.toString(i)).get();
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(50L));
-        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().totalHits(), equalTo(50L));
-        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().totalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
 
         logger.info("--> close indices");
         client.admin().indices().prepareClose("test-idx-1", "test-idx-2").get();
@@ -230,9 +228,9 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
         assertThat(restoreSnapshotResponse.getRestoreInfo().totalShards(), greaterThan(0));
 
         ensureGreen();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().totalHits(), equalTo(100L));
-        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().totalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-2").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-3").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
 
         // Test restore after index deletion
         logger.info("--> delete indices");
@@ -241,7 +239,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
         restoreSnapshotResponse = client.admin().cluster().prepareRestoreSnapshot("test-repo", "test-snap").setWaitForCompletion(true).setIndices("test-idx-*", "-test-idx-2").execute().actionGet();
         assertThat(restoreSnapshotResponse.getRestoreInfo().totalShards(), greaterThan(0));
         ensureGreen();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
         ClusterState clusterState = client.admin().cluster().prepareState().get().getState();
         assertThat(clusterState.getMetaData().hasIndex("test-idx-1"), equalTo(true));
         assertThat(clusterState.getMetaData().hasIndex("test-idx-2"), equalTo(false));
@@ -284,7 +282,6 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
         PutRepositoryResponse putRepositoryResponse = client.admin().cluster().preparePutRepository("test-repo")
                 .setType("s3").setSettings(Settings.builder()
                     .put(S3Repository.Repository.BASE_PATH_SETTING.getKey(), basePath)
-                    .put(S3Repository.Repository.REGION_SETTING.getKey(), bucketSettings.get("region"))
                     .put(S3Repository.Repository.KEY_SETTING.getKey(), bucketSettings.get("access_key"))
                     .put(S3Repository.Repository.SECRET_SETTING.getKey(), bucketSettings.get("secret_key"))
                     .put(S3Repository.Repository.BUCKET_SETTING.getKey(), bucketSettings.get("bucket"))
@@ -342,7 +339,6 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
                 .setType("s3").setSettings(Settings.builder()
                     .put(S3Repository.Repository.BASE_PATH_SETTING.getKey(), basePath)
                     .put(S3Repository.Repository.BUCKET_SETTING.getKey(), bucketSettings.get("bucket"))
-                    .put(S3Repository.Repository.REGION_SETTING.getKey(), bucketSettings.get("region"))
                     ).get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
@@ -406,7 +402,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
             index("test-idx-1", "doc", Integer.toString(i), "foo", "bar" + i);
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
 
         logger.info("--> snapshot");
         CreateSnapshotResponse createSnapshotResponse = client.admin().cluster().prepareCreateSnapshot(repository, "test-snap").setWaitForCompletion(true).setIndices("test-idx-*").get();
@@ -420,7 +416,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
             client.prepareDelete("test-idx-1", "doc", Integer.toString(i)).get();
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(50L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(50L));
 
         logger.info("--> close indices");
         client.admin().indices().prepareClose("test-idx-1").get();
@@ -430,7 +426,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
         assertThat(restoreSnapshotResponse.getRestoreInfo().totalShards(), greaterThan(0));
 
         ensureGreen();
-        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx-1").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
     }
 
 
@@ -463,18 +459,12 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
                 settings.getByPrefix("repositories.s3.external-bucket.")
         };
         for (Settings bucket : buckets) {
-            String endpoint = bucket.get("endpoint", S3Repository.Repositories.ENDPOINT_SETTING.get(settings));
-            Protocol protocol = S3Repository.Repositories.PROTOCOL_SETTING.get(settings);
-            String region = bucket.get("region", S3Repository.Repositories.REGION_SETTING.get(settings));
-            String accessKey = bucket.get("access_key", S3Repository.Repositories.KEY_SETTING.get(settings));
-            String secretKey = bucket.get("secret_key", S3Repository.Repositories.SECRET_SETTING.get(settings));
             String bucketName = bucket.get("bucket");
 
             // We check that settings has been set in elasticsearch.yml integration test file
             // as described in README
             assertThat("Your settings in elasticsearch.yml are incorrects. Check README file.", bucketName, notNullValue());
-            AmazonS3 client = internalCluster().getInstance(AwsS3Service.class).client(endpoint, protocol, region, accessKey, secretKey,
-                null, randomBoolean(), null);
+            AmazonS3 client = internalCluster().getInstance(AwsS3Service.class).client(Settings.EMPTY, null, randomBoolean(), null);
             try {
                 ObjectListing prevListing = null;
                 //From http://docs.amazonwebservices.com/AmazonS3/latest/dev/DeletingMultipleObjectsUsingJava.html
@@ -511,7 +501,7 @@ public abstract class AbstractS3SnapshotRestoreTest extends AbstractAwsTestCase 
                     client.deleteObjects(multiObjectDeleteRequest);
                 }
             } catch (Exception ex) {
-                logger.warn("Failed to delete S3 repository [{}] in [{}]", ex, bucketName, region);
+                logger.warn((Supplier<?>) () -> new ParameterizedMessage("Failed to delete S3 repository [{}]", bucketName), ex);
             }
         }
     }
