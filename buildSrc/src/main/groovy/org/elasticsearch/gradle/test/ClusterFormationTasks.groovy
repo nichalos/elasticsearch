@@ -522,23 +522,19 @@ class ClusterFormationTasks {
 
     static String getShortPathName(String path) {
         assert Os.isFamily(Os.FAMILY_WINDOWS)
-        try {
-            final WString longPath = new WString("\\\\?\\" + path)
-            // first we get the length of the buffer needed
-            final int length = JNAKernel32Library.getInstance().GetShortPathNameW(longPath, null, 0)
-            if (length == 0) {
-                return path
-            }
-            final char[] shortPath = new char[length]
-            // knowing the length of the buffer, now we get the short name
-            if (JNAKernel32Library.getInstance().GetShortPathNameW(longPath, shortPath, length) > 0) {
-                return Native.toString(shortPath).substring(4)
-            } else {
-                return path
-            }
-        } catch (final UnsatisfiedLinkError e) {
-            return path
+        final WString longPath = new WString("\\\\?\\" + path)
+        // first we get the length of the buffer needed
+        final int length = JNAKernel32Library.getInstance().GetShortPathNameW(longPath, null, 0)
+        if (length == 0) {
+            throw new IllegalStateException("error: [" + Native.getLastError() + "]")
         }
+        final char[] shortPath = new char[length]
+        // knowing the length of the buffer, now we get the short name
+        if (JNAKernel32Library.getInstance().GetShortPathNameW(longPath, shortPath, length) == 0) {
+            throw new IllegalStateException("error: [" + Native.getLastError() + "]")
+        }
+        // we have to strip the \\?\ away from the path for cmd.exe
+        return Native.toString(shortPath).substring(4)
     }
 
     /** Adds a task to execute a command to help setup the cluster */
