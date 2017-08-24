@@ -18,6 +18,8 @@
  */
 package org.elasticsearch.gradle.test
 
+import com.sun.jna.Native
+import com.sun.jna.WString
 import org.apache.tools.ant.DefaultLogger
 import org.apache.tools.ant.taskdefs.condition.Os
 import org.elasticsearch.gradle.LoggedExec
@@ -483,8 +485,29 @@ class ClusterFormationTasks {
         }
         // delay reading the file location until execution time by wrapping in a closure within a GString
         Object file = "${-> new File(node.pluginsTmpDir, pluginZip.singleFile.getName()).toURI().toURL().toString()}"
-        Object[] args = [new File(node.homeDir, 'bin/elasticsearch-plugin'), 'install', file]
+        Object[] args = [getShortPathName(new File(node.homeDir, 'bin').toString()) + '/elasticsearch-plugin', 'install', file]
         return configureExecTask(name, project, setup, node, args)
+    }
+
+    static String getShortPathName(String path) {
+        if (!Os.isFamily(Os.FAMILY_WINDOWS)) return
+        try {
+            final WString longPath = new WString("\\\\?\\" + path)
+            // first we get the length of the buffer needed
+            final int length = JNAKernel32Library.getInstance().GetShortPathNameW(longPath, null, 0)
+            if (length == 0) {
+                return path
+            }
+            final char[] shortPath = new char[length]
+            // knowing the length of the buffer, now we get the short name
+            if (JNAKernel32Library.getInstance().GetShortPathNameW(longPath, shortPath, length) > 0) {
+                return Native.toString(shortPath).substring(4)
+            } else {
+                return path
+            }
+        } catch (final UnsatisfiedLinkError e) {
+            return path
+        }
     }
 
     /** Wrapper for command line argument: surrounds comma with double quotes **/
