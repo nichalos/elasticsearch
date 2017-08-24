@@ -212,7 +212,7 @@ class ClusterFormationTasks {
             final Object commandPath
             if (Os.isFamily(Os.FAMILY_WINDOWS)) {
                 String argsZero = args[0]
-                commandPath = "${-> Paths.get(getShortPathName(node.homeDir.toString())).resolve(argsZero.toString()).toString()}"
+                commandPath = "${-> Paths.get(NodeInfo.getShortPathName(node.homeDir.toString())).resolve(argsZero.toString()).toString()}"
             } else {
                 commandPath = node.homeDir.toPath().resolve(args[0].toString()).toString()
             }
@@ -347,7 +347,7 @@ class ClusterFormationTasks {
         if (node.config.keystoreSettings.isEmpty()) {
             return setup
         } else {
-            final Object esKeystoreUtil = "${-> binPath(node).resolve('elasticsearch.keystore').toString()}"
+            final Object esKeystoreUtil = "${-> node.binPath().resolve('elasticsearch.keystore').toString()}"
             return configureExecTask(name, project, setup, node, esKeystoreUtil, 'create')
         }
     }
@@ -356,7 +356,7 @@ class ClusterFormationTasks {
     static Task configureAddKeystoreSettingTasks(String parent, Project project, Task setup, NodeInfo node) {
         Map kvs = node.config.keystoreSettings
         Task parentTask = setup
-        final Object esKeystoreUtil = "${-> binPath(node).resolve('elasticsearch.keystore').toString()}"
+        final Object esKeystoreUtil = "${-> node.binPath().resolve('elasticsearch.keystore').toString()}"
         for (Map.Entry<String, String> entry in kvs) {
             String key = entry.getKey()
             String name = taskName(parent, node, 'addToKeystore#' + key)
@@ -493,7 +493,7 @@ class ClusterFormationTasks {
         }
         // delay reading the file location until execution time by wrapping in a closure within a GString
         final Object file = "${-> new File(node.pluginsTmpDir, pluginZip.singleFile.getName()).toURI().toURL().toString()}"
-        final Object esPluginUtil = "${-> binPath(node).resolve('elasticsearch-plugin').toString()}"
+        final Object esPluginUtil = "${-> node.binPath().resolve('elasticsearch-plugin').toString()}"
         final Object[] args = [esPluginUtil, 'install', file]
         return configureExecTask(name, project, setup, node, args)
     }
@@ -512,31 +512,6 @@ class ClusterFormationTasks {
             }
             return s
         }
-    }
-
-    private static Path binPath(NodeInfo node) {
-        if (Os.isFamily(Os.FAMILY_WINDOWS)) {
-            return Paths.get(getShortPathName(new File(node.homeDir, 'bin').toString()))
-        } else {
-            return Paths.get(new File(node.homeDir, 'bin').toURI())
-        }
-    }
-
-    static String getShortPathName(String path) {
-        assert Os.isFamily(Os.FAMILY_WINDOWS)
-        final WString longPath = new WString("\\\\?\\" + path)
-        // first we get the length of the buffer needed
-        final int length = JNAKernel32Library.getInstance().GetShortPathNameW(longPath, null, 0)
-        if (length == 0) {
-            throw new IllegalStateException("path [" + path + "] encountered error [" + Native.getLastError() + "]")
-        }
-        final char[] shortPath = new char[length]
-        // knowing the length of the buffer, now we get the short name
-        if (JNAKernel32Library.getInstance().GetShortPathNameW(longPath, shortPath, length) == 0) {
-            throw new IllegalStateException("path [" + path + "] encountered error [" + Native.getLastError() + "]")
-        }
-        // we have to strip the \\?\ away from the path for cmd.exe
-        return Native.toString(shortPath).substring(4)
     }
 
     /** Adds a task to execute a command to help setup the cluster */
