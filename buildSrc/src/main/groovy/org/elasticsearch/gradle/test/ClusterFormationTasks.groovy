@@ -42,6 +42,7 @@ import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.Exec
 
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 
@@ -207,8 +208,14 @@ class ClusterFormationTasks {
         // extra setup commands
         for (Map.Entry<String, Object[]> command : node.config.setupCommands.entrySet()) {
             // the first argument is the actual script name, relative to home
+            final Path homeDirPath
+            if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+                homeDirPath = Paths.get(getShortPathName(node.homeDir.toString()))
+            } else {
+                homeDirPath = node.homeDir.toPath()
+            }
             Object[] args = command.getValue().clone()
-            args[0] = new File(node.homeDir, args[0].toString())
+            args[0] = homeDirPath.resolve(args[0].toString())
             setup = configureExecTask(taskName(prefix, node, command.getKey()), project, setup, node, args)
         }
 
@@ -339,7 +346,7 @@ class ClusterFormationTasks {
         if (node.config.keystoreSettings.isEmpty()) {
             return setup
         } else {
-            File esKeystoreUtil = Paths.get(node.homeDir.toString(), "bin/" + "elasticsearch-keystore").toFile()
+            final Path esKeystoreUtil = binPath(node).resolve('elasticsearch-keystore')
             return configureExecTask(name, project, setup, node, esKeystoreUtil, 'create')
         }
     }
@@ -347,7 +354,7 @@ class ClusterFormationTasks {
     /** Adds tasks to add settings to the keystore */
     static Task configureAddKeystoreSettingTasks(String parent, Project project, Task setup, NodeInfo node) {
         Map kvs = node.config.keystoreSettings
-        File esKeystoreUtil = Paths.get(node.homeDir.toString(), "bin/" + "elasticsearch-keystore").toFile()
+        Path esKeystoreUtil = binPath(node).resolve('elasticsearch-keystore')
         Task parentTask = setup
         for (Map.Entry<String, String> entry in kvs) {
             String key = entry.getKey()
@@ -485,12 +492,36 @@ class ClusterFormationTasks {
         }
         // delay reading the file location until execution time by wrapping in a closure within a GString
         Object file = "${-> new File(node.pluginsTmpDir, pluginZip.singleFile.getName()).toURI().toURL().toString()}"
-        Object[] args = [getShortPathName(new File(node.homeDir, 'bin').toString()) + '/elasticsearch-plugin', 'install', file]
+        Object[] args = [binPath(node).resolve('elasticsearch-plugin'), 'install', file]
         return configureExecTask(name, project, setup, node, args)
     }
 
+    /** Wrapper for command line argument: surrounds comma with double quotes **/
+    private static class EscapeCommaWrapper {
+
+        Object arg
+
+        public String toString() {
+            String s = arg.toString()
+
+            /// Surround strings that contains a comma with double quotes
+            if (s.indexOf(',') != -1) {
+                return "\"${s}\""
+            }
+            return s
+        }
+    }
+
+    private static Path binPath(NodeInfo node) {
+        if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+            return Paths.get(getShortPathName(new File(node.homeDir, 'bin').toString()))
+        } else {
+            return Paths.get(new File(node.homeDir, 'bin').toURI())
+        }
+    }
+
     static String getShortPathName(String path) {
-        if (!Os.isFamily(Os.FAMILY_WINDOWS)) return
+        assert Os.isFamily(Os.FAMILY_WINDOWS)
         try {
             final WString longPath = new WString("\\\\?\\" + path)
             // first we get the length of the buffer needed
@@ -507,22 +538,6 @@ class ClusterFormationTasks {
             }
         } catch (final UnsatisfiedLinkError e) {
             return path
-        }
-    }
-
-    /** Wrapper for command line argument: surrounds comma with double quotes **/
-    private static class EscapeCommaWrapper {
-
-        Object arg
-
-        public String toString() {
-            String s = arg.toString()
-
-            /// Surround strings that contains a comma with double quotes
-            if (s.indexOf(',') != -1) {
-                return "\"${s}\""
-            }
-            return s
         }
     }
 
