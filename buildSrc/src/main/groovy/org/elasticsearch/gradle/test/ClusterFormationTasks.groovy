@@ -211,7 +211,8 @@ class ClusterFormationTasks {
             Object[] args = command.getValue().clone()
             final Object commandPath
             if (Os.isFamily(Os.FAMILY_WINDOWS)) {
-                commandPath = "${-> Paths.get(getShortPathName(node.homeDir.toString())).resolve(args[0].toString()).toString()}"
+                String argsZero = args[0]
+                commandPath = "${-> Paths.get(getShortPathName(node.homeDir.toString())).resolve(argsZero.toString()).toString()}"
             } else {
                 commandPath = node.homeDir.toPath().resolve(args[0].toString()).toString()
             }
