@@ -213,7 +213,7 @@ class ClusterFormationTasks {
             if (Os.isFamily(Os.FAMILY_WINDOWS)) {
                 commandPath = "${-> Paths.get(getShortPathName(node.homeDir.toString())).resolve(args[0].toString()).toString()}"
             } else {
-                commandPath = new File(node.homeDir, args[0].toString()).toString()
+                commandPath = node.homeDir.toPath().resolve(args[0].toString()).toString()
             }
             args[0] = commandPath
             setup = configureExecTask(taskName(prefix, node, command.getKey()), project, setup, node, args)
@@ -527,12 +527,12 @@ class ClusterFormationTasks {
         // first we get the length of the buffer needed
         final int length = JNAKernel32Library.getInstance().GetShortPathNameW(longPath, null, 0)
         if (length == 0) {
-            throw new IllegalStateException("error: [" + Native.getLastError() + "]")
+            throw new IllegalStateException("path [" + path + "] encountered error [" + Native.getLastError() + "]")
         }
         final char[] shortPath = new char[length]
         // knowing the length of the buffer, now we get the short name
         if (JNAKernel32Library.getInstance().GetShortPathNameW(longPath, shortPath, length) == 0) {
-            throw new IllegalStateException("error: [" + Native.getLastError() + "]")
+            throw new IllegalStateException("path [" + path + "] encountered error [" + Native.getLastError() + "]")
         }
         // we have to strip the \\?\ away from the path for cmd.exe
         return Native.toString(shortPath).substring(4)
