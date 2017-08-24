@@ -137,11 +137,11 @@ class NodeInfo {
             args.add('/C')
             args.add('"') // quote the entire command
             wrapperScript = new File(cwd, "run.bat")
-            esScript = "${ -> binPath().resolve('elasticsearch.bat').toString()}"
+            esScript = "${-> binPath().resolve('elasticsearch.bat').toString()}"
         } else {
             executable = 'bash'
             wrapperScript = new File(cwd, "run")
-            esScript = binPath().resolve('elasticsearch.bat')
+            esScript = binPath().resolve('elasticsearch')
         }
         if (config.daemonize) {
             args.add("${wrapperScript}")
