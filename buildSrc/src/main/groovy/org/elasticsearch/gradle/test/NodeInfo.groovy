@@ -90,10 +90,10 @@ class NodeInfo {
     String executable
 
     /** Path to the elasticsearch start script */
-    File esScript
+    private Object esScript
 
     /** script to run when running in the background */
-    File wrapperScript
+    private File wrapperScript
 
     /** buffer for ant output when starting this node */
     ByteArrayOutputStream buffer = new ByteArrayOutputStream()
@@ -137,11 +137,11 @@ class NodeInfo {
             args.add('/C')
             args.add('"') // quote the entire command
             wrapperScript = new File(cwd, "run.bat")
-            esScript = binPath().resolve('elasticsearch.bat').toFile()
+            esScript = "${ -> binPath().resolve('elasticsearch.bat').toString()}"
         } else {
             executable = 'bash'
             wrapperScript = new File(cwd, "run")
-            esScript = new File(homeDir, 'bin/elasticsearch')
+            esScript = binPath().resolve('elasticsearch.bat')
         }
         if (config.daemonize) {
             args.add("${wrapperScript}")
