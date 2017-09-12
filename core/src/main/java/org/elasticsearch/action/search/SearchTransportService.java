@@ -447,12 +447,8 @@ public class SearchTransportService extends AbstractComponent {
             });
         TransportActionProxy.registerProxyAction(transportService, FETCH_ID_ACTION_NAME, FetchSearchResult::new);
 
-        /*
-         * If the query coordinating node is the same as the data node holding all the shards for the request, the can match phase could
-         * recurse through the local transport and callbacks if we executed on the same thread. Therefore we have to fork this request to
-         * another thread otherwise we could stack overflow (and we do not want to tie up a network thread anyway).
-         */
-        transportService.registerRequestHandler(QUERY_CAN_MATCH_NAME, ThreadPool.Names.SEARCH, ShardSearchTransportRequest::new,
+        // this is cheap, does not fetch during the rewrite phase, so can execute quickly on a networking thread
+        transportService.registerRequestHandler(QUERY_CAN_MATCH_NAME, ThreadPool.Names.SAME, ShardSearchTransportRequest::new,
             new TaskAwareTransportRequestHandler<ShardSearchTransportRequest>() {
                 @Override
                 public void messageReceived(ShardSearchTransportRequest request, TransportChannel channel, Task task) throws Exception {

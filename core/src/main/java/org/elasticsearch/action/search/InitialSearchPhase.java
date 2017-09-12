@@ -127,9 +127,10 @@ abstract class InitialSearchPhase<FirstResult extends SearchPhaseResult> extends
 
     @Override
     public final void run() throws IOException {
-        boolean success = shardExecutionIndex.compareAndSet(0, maxConcurrentShardRequests);
+        final int limit = canExecuteOnAllShardsConcurrently() ? shardsIts.size() : maxConcurrentShardRequests;
+        boolean success = shardExecutionIndex.compareAndSet(0, limit);
         assert success;
-        for (int i = 0; i < maxConcurrentShardRequests; i++) {
+        for (int i = 0; i < limit; i++) {
             SearchShardIterator shardRoutings = shardsIts.get(i);
             if (shardRoutings.skip()) {
                 skipShard(shardRoutings);
@@ -137,6 +138,10 @@ abstract class InitialSearchPhase<FirstResult extends SearchPhaseResult> extends
                 performPhaseOnShard(i, shardRoutings, shardRoutings.nextOrNull());
             }
         }
+    }
+
+    protected boolean canExecuteOnAllShardsConcurrently() {
+        return false;
     }
 
     private void maybeExecuteNext() {

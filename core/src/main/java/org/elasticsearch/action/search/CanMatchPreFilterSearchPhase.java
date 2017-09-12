@@ -63,6 +63,11 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<Searc
     }
 
     @Override
+    protected boolean canExecuteOnAllShardsConcurrently() {
+        return true;
+    }
+
+    @Override
     protected void executePhaseOnShard(SearchShardIterator shardIt, ShardRouting shard,
                                        SearchActionListener<SearchTransportService.CanMatchResponse> listener) {
         getSearchTransport().sendCanMatch(getConnection(shardIt.getClusterAlias(), shard.currentNodeId()),
