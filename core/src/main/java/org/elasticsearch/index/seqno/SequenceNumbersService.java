@@ -21,6 +21,7 @@ package org.elasticsearch.index.seqno;
 
 import com.carrotsearch.hppc.ObjectLongMap;
 import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
+import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.shard.AbstractIndexShardComponent;
 import org.elasticsearch.index.shard.ReplicationGroup;
@@ -138,10 +139,6 @@ public class SequenceNumbersService extends AbstractIndexShardComponent {
         globalCheckpointTracker.updateGlobalCheckpointForShard(allocationId, globalCheckpoint);
     }
 
-    public ObjectLongMap<String> getGlobalCheckpoints() {
-        return globalCheckpointTracker.getGlobalCheckpoints();
-    }
-
     /**
      * Called when the recovery process for a shard is ready to open the engine on the target shard.
      * See {@link GlobalCheckpointTracker#initiateTracking(String)} for details.
@@ -205,6 +202,10 @@ public class SequenceNumbersService extends AbstractIndexShardComponent {
      */
     public synchronized long getTrackedLocalCheckpointForShard(final String allocationId) {
         return globalCheckpointTracker.getTrackedLocalCheckpointForShard(allocationId).getLocalCheckpoint();
+    }
+
+    public ObjectLongMap<String> getGlobalCheckpoints() {
+        return globalCheckpointTracker.getGlobalCheckpoints();
     }
 
     /**
